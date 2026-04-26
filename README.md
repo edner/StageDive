@@ -1,8 +1,11 @@
+
 # Stage Dive 🤘
 
 A high-intensity concert simulation game built with Phaser 4, TypeScript, and Vite. 
 
 In **Stage Dive**, you play as an energetic fan trying to pull off the ultimate stunt: a massive stage dive. Build up your HYPE meter, evade relentless roadies, and interact with the band members on stage to achieve the highest score possible before launching yourself into the crowd!
+
+<img width="1448" height="1086" alt="StageDive design system" src="https://github.com/user-attachments/assets/8d630923-d01f-4719-9911-669839b3cc56" />
 
 ## Features
 
