@@ -14,6 +14,19 @@ const SECURITY_CHASER_FRAME_SIZE = 96;
 const ROADIE_FRAME_WIDTH = 224;
 const ROADIE_FRAME_HEIGHT = 288;
 const ROADIE_DISPLAY_SCALE = 0.21;
+const VOCALIST_FRAME_WIDTH = 208;
+const VOCALIST_FRAME_HEIGHT = 248;
+const VOCALIST_DISPLAY_SCALE = 0.35;
+const VOCALIST_HOME_POSITION = { x: GAME_WIDTH / 2, y: 120 } as const;
+const VOCALIST_WANDER_X_RANGE = 92;
+const VOCALIST_WANDER_UP_RANGE = 42;
+const VOCALIST_WANDER_DOWN_RANGE = 14;
+const VOCALIST_MOVE_SPEED = 58;
+const VOCALIST_HOME_STAY_CHANCE = 0.86;
+const VOCALIST_RETURN_HOME_CHANCE = 0.9;
+const VOCALIST_PERFORMANCE_MIN_MS = 900;
+const VOCALIST_PERFORMANCE_MAX_MS = 2200;
+const VOCALIST_TARGET_REACHED_RADIUS = 8;
 const ROADIE_HOME_POSITIONS = [
   { x: 54, y: 115, idleSide: 'left' },
   { x: GAME_WIDTH - 42, y: 115, idleSide: 'right' }
@@ -29,6 +42,7 @@ interface BeatEvent {
 }
 
 type SecurityFacing = 'front' | 'back' | 'left' | 'right';
+type VocalistFacing = 'front' | 'back' | 'left' | 'right';
 type RoadieFacing = 'front' | 'back' | 'left' | 'right';
 type RoadieIdleSide = 'left' | 'right';
 type RoadiePushDirection = 'left' | 'right' | 'forward';
@@ -44,6 +58,7 @@ type PlayerSpecialAnimation =
 
 export default class GameScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
+  private vocalist!: Phaser.Physics.Arcade.Sprite;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: any;
   private spaceKey!: Phaser.Input.Keyboard.Key;
@@ -112,6 +127,11 @@ export default class GameScene extends Phaser.Scene {
       frameHeight: ROADIE_FRAME_HEIGHT
     });
 
+    this.load.spritesheet('vocalist_sheet', 'assets/vocalist-sheet.png', {
+      frameWidth: VOCALIST_FRAME_WIDTH,
+      frameHeight: VOCALIST_FRAME_HEIGHT
+    });
+
     const graphics = this.add.graphics();
 
     // Normal Crowd: pink circle with a dark center
@@ -140,19 +160,6 @@ export default class GameScene extends Phaser.Scene {
     this.load.image('pa_speaker', 'assets/pa-speaker.png');
     this.load.image('stage_background', 'assets/stage-background.png');
 
-    // Vocalist: Circle holding a mic stand
-    graphics.fillStyle(0x00ffaa, 1);
-    graphics.fillCircle(14, 14, 14);
-    graphics.fillStyle(0x222222, 1); // mic base
-    graphics.fillCircle(14, 28, 6);
-    graphics.lineStyle(2, 0xdddddd, 1); // mic pole
-    graphics.moveTo(14, 28); graphics.lineTo(14, 14);
-    graphics.strokePath();
-    graphics.fillStyle(0xcccccc, 1); // mic head
-    graphics.fillCircle(14, 12, 4);
-    graphics.generateTexture('vocalist', 28, 34);
-    graphics.clear();
-    
     // Drummer: behind a drum kit
     graphics.fillStyle(0xffaa00, 1);
     graphics.fillCircle(20, 10, 10); // drummer head
@@ -196,6 +203,7 @@ export default class GameScene extends Phaser.Scene {
     this.createPlayerAnimations();
     this.createSecurityChaserAnimations();
     this.createRoadieAnimations();
+    this.createVocalistAnimations();
 
     this.crowdGroup = this.physics.add.group();
     this.securityBarrierGroup = this.physics.add.group({ immovable: true });
@@ -251,6 +259,7 @@ export default class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.player, this.crowdGroup, this.handlePitCollision, undefined, this);
     this.physics.add.collider(this.player, this.lineCrowdGroup, this.handleLineCollision, undefined, this);
     this.physics.add.collider(this.crowdGroup, this.lineCrowdGroup);
+    this.physics.add.collider(this.roadiesGroup, this.musiciansGroup);
     
     // Player vs Security Wall
     this.physics.add.collider(this.player, this.securityBarrierGroup, (p: any, r: any) => {
@@ -428,6 +437,219 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
+  private createVocalistAnimations() {
+    if (this.anims.exists('vocalist-idle-front')) {
+      return;
+    }
+
+    const animations: Array<{
+      key: string;
+      frames: number[];
+      frameRate: number;
+      repeat: number;
+    }> = [
+      { key: 'vocalist-idle-front', frames: [0], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-idle-left', frames: [1], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-idle-right', frames: [2], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-idle-back', frames: [25], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-sing-front', frames: [4], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-sing-left', frames: [5], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-sing-right', frames: [6], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-mic-stand-front', frames: [7], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-mic-stand-left', frames: [8], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-hype-crowd', frames: [9], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-pointing-mic-out', frames: [11], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-scream-power-vocal', frames: [12], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-crouch-sing', frames: [13], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-kneel-sing', frames: [14], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-headbang', frames: [15, 16], frameRate: 6, repeat: -1 },
+      { key: 'vocalist-jump-pose', frames: [17], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-lean-back-sing', frames: [18], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-walk-front', frames: [19, 20], frameRate: 6, repeat: -1 },
+      { key: 'vocalist-walk-left', frames: [21], frameRate: 1, repeat: -1 },
+      { key: 'vocalist-walk-back', frames: [25], frameRate: 1, repeat: -1 }
+    ];
+
+    animations.forEach(({ key, frames, frameRate, repeat }) => {
+      this.anims.create({
+        key,
+        frames: this.anims.generateFrameNumbers('vocalist_sheet', { frames }),
+        frameRate,
+        repeat
+      });
+    });
+  }
+
+  private configureVocalistBody(vocalist: Phaser.Physics.Arcade.Sprite) {
+    const body = vocalist.body as Phaser.Physics.Arcade.Body | null;
+    if (!body) return;
+
+    body.setSize(54, 84);
+    body.setOffset(77, 152);
+  }
+
+  private playVocalistAnimation(animationKey: string, flipX: boolean = false) {
+    if (!this.vocalist) return;
+
+    this.vocalist.setFlipX(flipX);
+    if (this.vocalist.anims.currentAnim?.key !== animationKey || this.vocalist.flipX !== flipX) {
+      this.vocalist.play(animationKey, true);
+      this.vocalist.setFlipX(flipX);
+    }
+  }
+
+  private getVocalistHomeAnimation(): { key: string; flipX?: boolean } {
+    const homeAnimations = [
+      { key: 'vocalist-mic-stand-front' },
+      { key: 'vocalist-mic-stand-front' },
+      { key: 'vocalist-mic-stand-front' },
+      { key: 'vocalist-mic-stand-front' },
+      { key: 'vocalist-mic-stand-front' },
+      { key: 'vocalist-mic-stand-front' },
+      { key: 'vocalist-sing-front' },
+      { key: 'vocalist-sing-front' },
+      { key: 'vocalist-idle-front' },
+      { key: 'vocalist-mic-stand-left' },
+      { key: 'vocalist-mic-stand-left', flipX: true },
+      { key: 'vocalist-sing-left' },
+      { key: 'vocalist-sing-right' }
+    ];
+
+    return Phaser.Utils.Array.GetRandom(homeAnimations);
+  }
+
+  private getVocalistAwayAnimation(): { key: string; flipX?: boolean } {
+    const awayAnimations = [
+      { key: 'vocalist-idle-front' },
+      { key: 'vocalist-idle-left' },
+      { key: 'vocalist-idle-right' },
+      { key: 'vocalist-sing-left' },
+      { key: 'vocalist-sing-right' },
+      { key: 'vocalist-hype-crowd' },
+      { key: 'vocalist-pointing-mic-out' },
+      { key: 'vocalist-scream-power-vocal' },
+      { key: 'vocalist-crouch-sing' },
+      { key: 'vocalist-kneel-sing' },
+      { key: 'vocalist-headbang' },
+      { key: 'vocalist-jump-pose' },
+      { key: 'vocalist-lean-back-sing' }
+    ];
+
+    return Phaser.Utils.Array.GetRandom(awayAnimations);
+  }
+
+  private getRandomPerformanceDuration() {
+    return Phaser.Math.Between(VOCALIST_PERFORMANCE_MIN_MS, VOCALIST_PERFORMANCE_MAX_MS);
+  }
+
+  private isVocalistAtHome() {
+    return (
+      Phaser.Math.Distance.Between(
+        this.vocalist.x,
+        this.vocalist.y,
+        VOCALIST_HOME_POSITION.x,
+        VOCALIST_HOME_POSITION.y
+      ) <= VOCALIST_TARGET_REACHED_RADIUS
+    );
+  }
+
+  private startVocalistPerformance(time: number, atHome: boolean) {
+    const performance = atHome
+      ? this.getVocalistHomeAnimation()
+      : this.getVocalistAwayAnimation();
+
+    this.vocalist.setVelocity(0, 0);
+    this.vocalist.setData('state', 'performing');
+    this.vocalist.setData('stateUntil', time + this.getRandomPerformanceDuration());
+    this.playVocalistAnimation(performance.key, performance.flipX ?? false);
+  }
+
+  private moveVocalistTo(targetX: number, targetY: number) {
+    this.vocalist.setData('state', 'moving');
+    this.vocalist.setData('targetX', targetX);
+    this.vocalist.setData('targetY', targetY);
+  }
+
+  private getRandomVocalistStageTarget() {
+    const minX = Phaser.Math.Clamp(
+      VOCALIST_HOME_POSITION.x - VOCALIST_WANDER_X_RANGE,
+      42,
+      GAME_WIDTH - 42
+    );
+    const maxX = Phaser.Math.Clamp(
+      VOCALIST_HOME_POSITION.x + VOCALIST_WANDER_X_RANGE,
+      42,
+      GAME_WIDTH - 42
+    );
+    const minY = Phaser.Math.Clamp(
+      VOCALIST_HOME_POSITION.y - VOCALIST_WANDER_UP_RANGE,
+      28,
+      STAGE_BOTTOM_Y - 18
+    );
+    const maxY = Phaser.Math.Clamp(
+      VOCALIST_HOME_POSITION.y + VOCALIST_WANDER_DOWN_RANGE,
+      28,
+      STAGE_BOTTOM_Y - 18
+    );
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const x = Phaser.Math.Between(minX, maxX);
+      const y = Phaser.Math.Between(minY, maxY);
+      if (
+        Phaser.Math.Distance.Between(x, y, VOCALIST_HOME_POSITION.x, VOCALIST_HOME_POSITION.y) >
+        28
+      ) {
+        return { x, y };
+      }
+    }
+
+    return {
+      x: Phaser.Math.Between(minX, maxX),
+      y: Phaser.Math.Between(minY, maxY)
+    };
+  }
+
+  private chooseNextVocalistAction(time: number) {
+    const atHome = this.isVocalistAtHome();
+
+    if (atHome) {
+      if (Math.random() < VOCALIST_HOME_STAY_CHANCE) {
+        this.startVocalistPerformance(time, true);
+      } else {
+        const nextSpot = this.getRandomVocalistStageTarget();
+        this.moveVocalistTo(nextSpot.x, nextSpot.y);
+      }
+      return;
+    }
+
+    if (Math.random() < VOCALIST_RETURN_HOME_CHANCE) {
+      this.moveVocalistTo(VOCALIST_HOME_POSITION.x, VOCALIST_HOME_POSITION.y);
+      return;
+    }
+
+    if (Math.random() < 0.5) {
+      this.startVocalistPerformance(time, false);
+      return;
+    }
+
+    const nextSpot = this.getRandomVocalistStageTarget();
+    this.moveVocalistTo(nextSpot.x, nextSpot.y);
+  }
+
+  private resetVocalistState(time: number) {
+    if (!this.vocalist) return;
+
+    this.vocalist.setPosition(VOCALIST_HOME_POSITION.x, VOCALIST_HOME_POSITION.y);
+    this.vocalist.setVelocity(0, 0);
+    this.vocalist.setAlpha(1);
+    this.vocalist.setData('jammed', false);
+    this.vocalist.setData('facing', 'front');
+    this.vocalist.setData('state', 'performing');
+    this.vocalist.setData('targetX', VOCALIST_HOME_POSITION.x);
+    this.vocalist.setData('targetY', VOCALIST_HOME_POSITION.y);
+    this.startVocalistPerformance(time, true);
+  }
+
   private configureRoadieBody(roadie: Phaser.Physics.Arcade.Sprite) {
     const body = roadie.body as Phaser.Physics.Arcade.Body | null;
     if (!body) return;
@@ -540,15 +762,25 @@ export default class GameScene extends Phaser.Scene {
 
   private spawnMusicians() {
     const band = [
-      { x: GAME_WIDTH / 2, y: 120, key: 'vocalist', type: 'vocal' },
+      { x: VOCALIST_HOME_POSITION.x, y: VOCALIST_HOME_POSITION.y, key: 'vocalist_sheet', type: 'vocal', frame: 7 },
       { x: GAME_WIDTH / 2, y: 30, key: 'drummer', type: 'drum' },
       { x: GAME_WIDTH / 2 - 80, y: 80, key: 'guitarist', type: 'guitar' },
       { x: GAME_WIDTH / 2 + 80, y: 80, key: 'bassist', type: 'bass' }
     ];
     
     band.forEach(m => {
-      const musician = this.musiciansGroup.create(m.x, m.y, m.key) as Phaser.Physics.Arcade.Sprite;
+      const musician = this.musiciansGroup.create(m.x, m.y, m.key, m.frame ?? 0) as Phaser.Physics.Arcade.Sprite;
       musician.setData('type', m.type);
+      musician.setData('spawnX', m.x);
+      musician.setData('spawnY', m.y);
+
+      if (m.type === 'vocal') {
+        this.vocalist = musician;
+        musician.setScale(VOCALIST_DISPLAY_SCALE);
+        musician.setCollideWorldBounds(true);
+        this.configureVocalistBody(musician);
+        this.resetVocalistState(this.time.now);
+      }
     });
   }
 
@@ -641,7 +873,10 @@ export default class GameScene extends Phaser.Scene {
     this.musiciansGroup.getChildren().forEach((child: any) => {
       child.setData('jammed', false);
       child.setAlpha(1);
+      child.setPosition(child.getData('spawnX'), child.getData('spawnY'));
     });
+
+    this.resetVocalistState(this.time.now);
   }
 
   update(time: number, delta: number) {
@@ -655,6 +890,7 @@ export default class GameScene extends Phaser.Scene {
     }
 
     this.updatePlayerAnimation();
+    this.updateVocalistAI(time);
     
     // If player is on stage, build hype quickly!
     if (this.player.y < STAGE_BOTTOM_Y && !this.isPerforming) {
@@ -777,6 +1013,10 @@ export default class GameScene extends Phaser.Scene {
     if (type === 'bass') textStr = "SLAPPIN BASS!";
     
     this.updateHype(this.hype + points);
+
+    if (musician === this.vocalist) {
+      this.playVocalistAnimation('vocalist-hype-crowd');
+    }
     
     // Let the roadie retreat naturally to its current home position.
     this.roadiesGroup.getChildren().forEach((child: any) => {
@@ -798,6 +1038,9 @@ export default class GameScene extends Phaser.Scene {
     this.time.delayedCall(3000, () => {
       text.destroy();
       this.isPerforming = false;
+      if (musician === this.vocalist) {
+        this.startVocalistPerformance(this.time.now, this.isVocalistAtHome());
+      }
       // Reset the stage entry time to NOW so they lag for 1.5s after performance finishes
       this.stageEntryTime = this.time.now;
     });
@@ -1120,6 +1363,66 @@ export default class GameScene extends Phaser.Scene {
 
       this.updateRoadieAnimation(ai);
     });
+  }
+
+  private updateVocalistAI(time: number) {
+    if (!this.vocalist?.active) {
+      return;
+    }
+
+    if (this.isPerforming) {
+      this.vocalist.setVelocity(0, 0);
+      return;
+    }
+
+    const state = (this.vocalist.getData('state') as string | undefined) ?? 'performing';
+    const targetX =
+      (this.vocalist.getData('targetX') as number | undefined) ?? VOCALIST_HOME_POSITION.x;
+    const targetY =
+      (this.vocalist.getData('targetY') as number | undefined) ?? VOCALIST_HOME_POSITION.y;
+
+    if (state === 'moving') {
+      const distance = Phaser.Math.Distance.Between(this.vocalist.x, this.vocalist.y, targetX, targetY);
+      if (distance <= VOCALIST_TARGET_REACHED_RADIUS) {
+        this.vocalist.setPosition(targetX, targetY);
+        this.startVocalistPerformance(time, this.isVocalistAtHome());
+        return;
+      }
+
+      this.physics.moveTo(this.vocalist, targetX, targetY, VOCALIST_MOVE_SPEED);
+      const velocity = this.vocalist.body?.velocity;
+      const speedX = velocity?.x ?? 0;
+      const speedY = velocity?.y ?? 0;
+
+      let facing: VocalistFacing =
+        (this.vocalist.getData('facing') as VocalistFacing | undefined) ?? 'front';
+
+      if (Math.abs(speedX) > Math.abs(speedY)) {
+        facing = speedX >= 0 ? 'right' : 'left';
+      } else if (Math.abs(speedY) > 2) {
+        facing = speedY >= 0 ? 'front' : 'back';
+      }
+
+      this.vocalist.setData('facing', facing);
+
+      if (facing === 'right') {
+        this.playVocalistAnimation('vocalist-walk-left', true);
+      } else if (facing === 'left') {
+        this.playVocalistAnimation('vocalist-walk-left');
+      } else if (facing === 'back') {
+        this.playVocalistAnimation('vocalist-walk-back');
+      } else {
+        this.playVocalistAnimation('vocalist-walk-front');
+      }
+      return;
+    }
+
+    this.vocalist.setVelocity(0, 0);
+
+    const stateUntil = (this.vocalist.getData('stateUntil') as number | undefined) ?? 0;
+    if (time >= stateUntil) {
+      this.chooseNextVocalistAction(time);
+    }
   }
 
   private updateCrowdAI(time: number) {
