@@ -44,7 +44,7 @@ const STAGE_BOTTOM_Y = 150;
 const SECURITY_BOTTOM_Y = 250;
 
 const BONUS_ACTION_DURATION = 3000;
-const MUSICIAN_SPECIAL_COOLDOWN = 3000;
+const MUSICIAN_SPECIAL_COOLDOWN = 12000;
 
 interface BeatEvent {
   time: number;
@@ -564,7 +564,9 @@ export default class GameScene extends Phaser.Scene {
 
     this.drummer.setPosition(DRUMMER_HOME_POSITION.x, DRUMMER_HOME_POSITION.y);
     this.drummer.setVelocity(0, 0);
-    this.drummer.setAlpha(1);
+    if (!this.drummer.getData('onCooldown')) {
+        this.drummer.setAlpha(1);
+    }
     this.drummer.setData('jammed', false);
     this.drummer.setData('spawnX', DRUMMER_HOME_POSITION.x);
     this.drummer.setData('spawnY', DRUMMER_HOME_POSITION.y);
@@ -603,7 +605,7 @@ export default class GameScene extends Phaser.Scene {
 
     this.musiciansGroup.getChildren().forEach((child: any) => {
       const musician = child as Phaser.Physics.Arcade.Sprite;
-      if (musician.getData('jammed')) {
+      if (musician.getData('jammed') || musician.getData('onCooldown')) {
         return;
       }
 
@@ -766,7 +768,9 @@ export default class GameScene extends Phaser.Scene {
 
     this.vocalist.setPosition(VOCALIST_HOME_POSITION.x, VOCALIST_HOME_POSITION.y);
     this.vocalist.setVelocity(0, 0);
-    this.vocalist.setAlpha(1);
+    if (!this.vocalist.getData('onCooldown')) {
+        this.vocalist.setAlpha(1);
+    }
     this.vocalist.setData('jammed', false);
     this.vocalist.setData('facing', 'front');
     this.vocalist.setData('state', 'performing');
@@ -1129,7 +1133,10 @@ export default class GameScene extends Phaser.Scene {
   private performBonusAction(musician: Phaser.Physics.Arcade.Sprite) {
     this.isPerforming = true;
     this.player.setVelocity(0, 0);
+    
+    // Set both jammed (for AI) and onCooldown (for interaction)
     musician.setData('jammed', true);
+    musician.setData('onCooldown', true);
     musician.setAlpha(0.5); // Visually indicate they are exhausted
     
     const type = musician.getData('type');
@@ -1165,17 +1172,28 @@ export default class GameScene extends Phaser.Scene {
       targets: text, scaleX: 1.2, scaleY: 1.2, yoyo: true, duration: 300, repeat: 4
     });
     
-    // Wait 3 seconds
-    this.time.delayedCall(3000, () => {
+    // Performance duration - player is free to move after this
+    this.time.delayedCall(BONUS_ACTION_DURATION, () => {
       text.destroy();
       this.isPerforming = false;
+      
+      // Reset jammed state so AI can resume normal behavior
+      musician.setData('jammed', false);
+      
       if (musician === this.vocalist) {
         this.startVocalistPerformance(this.time.now, this.isVocalistAtHome());
       } else if (musician === this.drummer) {
         this.resetDrummerState(this.time.now);
       }
+      
       // Reset the stage entry time to NOW so they lag for 1.5s after performance finishes
       this.stageEntryTime = this.time.now;
+    });
+
+    // Interaction cooldown - musician becomes available again after this
+    this.time.delayedCall(MUSICIAN_SPECIAL_COOLDOWN, () => {
+      musician.setData('onCooldown', false);
+      musician.setAlpha(1);
     });
   }
 
