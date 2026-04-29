@@ -17,7 +17,12 @@ const ROADIE_DISPLAY_SCALE = 0.21;
 const VOCALIST_FRAME_WIDTH = 208;
 const VOCALIST_FRAME_HEIGHT = 248;
 const VOCALIST_DISPLAY_SCALE = 0.35;
+const DRUMMER_FRAME_WIDTH = 229;
+const DRUMMER_FRAME_HEIGHT = 230;
+const DRUMMER_DISPLAY_SCALE = 0.34;
 const VOCALIST_HOME_POSITION = { x: GAME_WIDTH / 2, y: 120 } as const;
+const DRUMMER_HOME_POSITION = { x: GAME_WIDTH / 2, y: 30 } as const;
+const STAGE_INTERACTION_RADIUS = 70;
 const VOCALIST_WANDER_X_RANGE = 92;
 const VOCALIST_WANDER_UP_RANGE = 42;
 const VOCALIST_WANDER_DOWN_RANGE = 14;
@@ -27,6 +32,8 @@ const VOCALIST_RETURN_HOME_CHANCE = 0.9;
 const VOCALIST_PERFORMANCE_MIN_MS = 900;
 const VOCALIST_PERFORMANCE_MAX_MS = 2200;
 const VOCALIST_TARGET_REACHED_RADIUS = 8;
+const DRUMMER_PERFORMANCE_MIN_MS = 900;
+const DRUMMER_PERFORMANCE_MAX_MS = 1800;
 const ROADIE_HOME_POSITIONS = [
   { x: 54, y: 115, idleSide: 'left' },
   { x: GAME_WIDTH - 42, y: 115, idleSide: 'right' }
@@ -35,6 +42,9 @@ const ROADIE_HOME_POSITIONS = [
 // New Boundaries
 const STAGE_BOTTOM_Y = 150;
 const SECURITY_BOTTOM_Y = 250;
+
+const BONUS_ACTION_DURATION = 3000;
+const MUSICIAN_SPECIAL_COOLDOWN = 3000;
 
 interface BeatEvent {
   time: number;
@@ -59,6 +69,7 @@ type PlayerSpecialAnimation =
 export default class GameScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private vocalist!: Phaser.Physics.Arcade.Sprite;
+  private drummer!: Phaser.Physics.Arcade.Sprite;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: any;
   private spaceKey!: Phaser.Input.Keyboard.Key;
@@ -132,6 +143,11 @@ export default class GameScene extends Phaser.Scene {
       frameHeight: VOCALIST_FRAME_HEIGHT
     });
 
+    this.load.spritesheet('drummer_sheet', 'assets/drummer-spritesheet.png', {
+      frameWidth: DRUMMER_FRAME_WIDTH,
+      frameHeight: DRUMMER_FRAME_HEIGHT
+    });
+
     const graphics = this.add.graphics();
 
     // Normal Crowd: pink circle with a dark center
@@ -160,19 +176,6 @@ export default class GameScene extends Phaser.Scene {
     this.load.image('pa_speaker', 'assets/pa-speaker.png');
     this.load.image('stage_background', 'assets/stage-background.png');
 
-    // Drummer: behind a drum kit
-    graphics.fillStyle(0xffaa00, 1);
-    graphics.fillCircle(20, 10, 10); // drummer head
-    graphics.fillStyle(0xeeeeee, 1);
-    graphics.fillCircle(10, 24, 8); // tom 1
-    graphics.fillCircle(30, 24, 8); // tom 2
-    graphics.fillCircle(20, 32, 12); // kick
-    graphics.fillStyle(0xddaa00, 1);
-    graphics.fillCircle(6, 14, 6); // cymbal 1
-    graphics.fillCircle(34, 14, 6); // cymbal 2
-    graphics.generateTexture('drummer', 40, 44);
-    graphics.clear();
-    
     // Guitarist: with a stratocaster shape
     graphics.fillStyle(0x00aaff, 1);
     graphics.fillCircle(16, 16, 12);
@@ -204,6 +207,7 @@ export default class GameScene extends Phaser.Scene {
     this.createSecurityChaserAnimations();
     this.createRoadieAnimations();
     this.createVocalistAnimations();
+    this.createDrummerAnimations();
 
     this.crowdGroup = this.physics.add.group();
     this.securityBarrierGroup = this.physics.add.group({ immovable: true });
@@ -260,6 +264,7 @@ export default class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.player, this.lineCrowdGroup, this.handleLineCollision, undefined, this);
     this.physics.add.collider(this.crowdGroup, this.lineCrowdGroup);
     this.physics.add.collider(this.roadiesGroup, this.musiciansGroup);
+    this.physics.add.collider(this.player, this.drummer);
     
     // Player vs Security Wall
     this.physics.add.collider(this.player, this.securityBarrierGroup, (p: any, r: any) => {
@@ -480,6 +485,33 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
+  private createDrummerAnimations() {
+    if (this.anims.exists('drummer-idle')) {
+      return;
+    }
+
+    const animations: Array<{
+      key: string;
+      frames: number[];
+      frameRate: number;
+      repeat: number;
+    }> = [
+      { key: 'drummer-idle', frames: [0, 1, 2, 3], frameRate: 5, repeat: -1 },
+      { key: 'drummer-groove', frames: [4, 5, 6, 7], frameRate: 7, repeat: -1 },
+      { key: 'drummer-fill', frames: [8, 9, 10, 11], frameRate: 8, repeat: -1 },
+      { key: 'drummer-finale', frames: [12, 13, 14, 15], frameRate: 7, repeat: -1 }
+    ];
+
+    animations.forEach(({ key, frames, frameRate, repeat }) => {
+      this.anims.create({
+        key,
+        frames: this.anims.generateFrameNumbers('drummer_sheet', { frames }),
+        frameRate,
+        repeat
+      });
+    });
+  }
+
   private configureVocalistBody(vocalist: Phaser.Physics.Arcade.Sprite) {
     const body = vocalist.body as Phaser.Physics.Arcade.Body | null;
     if (!body) return;
@@ -496,6 +528,99 @@ export default class GameScene extends Phaser.Scene {
       this.vocalist.play(animationKey, true);
       this.vocalist.setFlipX(flipX);
     }
+  }
+
+  private configureDrummerBody(drummer: Phaser.Physics.Arcade.Sprite) {
+    const body = drummer.body as Phaser.Physics.Arcade.Body | null;
+    if (!body) return;
+
+    body.setSize(88, 64);
+    body.setOffset(71, 140);
+    body.setAllowGravity(false);
+    body.moves = false;
+  }
+
+  private playDrummerAnimation(animationKey: string) {
+    if (!this.drummer) return;
+
+    if (this.drummer.anims.currentAnim?.key !== animationKey) {
+      this.drummer.play(animationKey, true);
+    }
+  }
+
+  private getRandomDrummerAnimation() {
+    return Phaser.Utils.Array.GetRandom([
+      'drummer-idle',
+      'drummer-idle',
+      'drummer-groove',
+      'drummer-groove',
+      'drummer-fill',
+      'drummer-finale'
+    ]);
+  }
+
+  private resetDrummerState(time: number) {
+    if (!this.drummer?.active) return;
+
+    this.drummer.setPosition(DRUMMER_HOME_POSITION.x, DRUMMER_HOME_POSITION.y);
+    this.drummer.setVelocity(0, 0);
+    this.drummer.setAlpha(1);
+    this.drummer.setData('jammed', false);
+    this.drummer.setData('spawnX', DRUMMER_HOME_POSITION.x);
+    this.drummer.setData('spawnY', DRUMMER_HOME_POSITION.y);
+    this.drummer.setData('stateUntil', 0);
+    this.startDrummerPerformance(time);
+  }
+
+  private startDrummerPerformance(time: number) {
+    if (!this.drummer?.active) return;
+
+    this.drummer.setVelocity(0, 0);
+    this.drummer.setData(
+      'stateUntil',
+      time + Phaser.Math.Between(DRUMMER_PERFORMANCE_MIN_MS, DRUMMER_PERFORMANCE_MAX_MS)
+    );
+    this.playDrummerAnimation(this.getRandomDrummerAnimation());
+  }
+
+  private updateDrummerAI(time: number) {
+    if (!this.drummer?.active || this.drummer.getData('jammed')) {
+      return;
+    }
+
+    this.drummer.setPosition(DRUMMER_HOME_POSITION.x, DRUMMER_HOME_POSITION.y);
+    this.drummer.setVelocity(0, 0);
+
+    const stateUntil = (this.drummer.getData('stateUntil') as number | undefined) ?? 0;
+    if (time >= stateUntil) {
+      this.startDrummerPerformance(time);
+    }
+  }
+
+  private getNearbyAvailableMusician() {
+    let nearest: Phaser.Physics.Arcade.Sprite | null = null;
+    let nearestDistance = STAGE_INTERACTION_RADIUS;
+
+    this.musiciansGroup.getChildren().forEach((child: any) => {
+      const musician = child as Phaser.Physics.Arcade.Sprite;
+      if (musician.getData('jammed')) {
+        return;
+      }
+
+      const distance = Phaser.Math.Distance.Between(
+        this.player.x,
+        this.player.y,
+        musician.x,
+        musician.y
+      );
+
+      if (distance <= nearestDistance) {
+        nearest = musician;
+        nearestDistance = distance;
+      }
+    });
+
+    return nearest;
   }
 
   private getVocalistHomeAnimation(): { key: string; flipX?: boolean } {
@@ -763,7 +888,7 @@ export default class GameScene extends Phaser.Scene {
   private spawnMusicians() {
     const band = [
       { x: VOCALIST_HOME_POSITION.x, y: VOCALIST_HOME_POSITION.y, key: 'vocalist_sheet', type: 'vocal', frame: 7 },
-      { x: GAME_WIDTH / 2, y: 30, key: 'drummer', type: 'drum' },
+      { x: DRUMMER_HOME_POSITION.x, y: DRUMMER_HOME_POSITION.y, key: 'drummer_sheet', type: 'drum', frame: 0 },
       { x: GAME_WIDTH / 2 - 80, y: 80, key: 'guitarist', type: 'guitar' },
       { x: GAME_WIDTH / 2 + 80, y: 80, key: 'bassist', type: 'bass' }
     ];
@@ -780,6 +905,14 @@ export default class GameScene extends Phaser.Scene {
         musician.setCollideWorldBounds(true);
         this.configureVocalistBody(musician);
         this.resetVocalistState(this.time.now);
+      } else if (m.type === 'drum') {
+        this.drummer = musician;
+        musician.setScale(DRUMMER_DISPLAY_SCALE);
+        musician.setCollideWorldBounds(true);
+        musician.setImmovable(true);
+        musician.setPushable(false);
+        this.configureDrummerBody(musician);
+        this.resetDrummerState(this.time.now);
       }
     });
   }
@@ -877,6 +1010,7 @@ export default class GameScene extends Phaser.Scene {
     });
 
     this.resetVocalistState(this.time.now);
+    this.resetDrummerState(this.time.now);
   }
 
   update(time: number, delta: number) {
@@ -891,6 +1025,7 @@ export default class GameScene extends Phaser.Scene {
 
     this.updatePlayerAnimation();
     this.updateVocalistAI(time);
+    this.updateDrummerAI(time);
     
     // If player is on stage, build hype quickly!
     if (this.player.y < STAGE_BOTTOM_Y && !this.isPerforming) {
@@ -908,17 +1043,11 @@ export default class GameScene extends Phaser.Scene {
       
       // Intentional stage dive or performance
       if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
-        let performed = false;
-        
-        // Check overlap with musicians
-        this.physics.overlap(this.player, this.musiciansGroup, (_p, m: any) => {
-          if (!performed && !m.getData('jammed')) {
-            performed = true;
-            this.performBonusAction(m);
-          }
-        });
-        
-        if (!performed) {
+        const nearbyMusician = this.getNearbyAvailableMusician();
+
+        if (nearbyMusician) {
+          this.performBonusAction(nearbyMusician);
+        } else {
           this.executeStageDive(false);
         }
       }
@@ -1016,6 +1145,8 @@ export default class GameScene extends Phaser.Scene {
 
     if (musician === this.vocalist) {
       this.playVocalistAnimation('vocalist-hype-crowd');
+    } else if (musician === this.drummer) {
+      this.playDrummerAnimation('drummer-finale');
     }
     
     // Let the roadie retreat naturally to its current home position.
@@ -1040,6 +1171,8 @@ export default class GameScene extends Phaser.Scene {
       this.isPerforming = false;
       if (musician === this.vocalist) {
         this.startVocalistPerformance(this.time.now, this.isVocalistAtHome());
+      } else if (musician === this.drummer) {
+        this.resetDrummerState(this.time.now);
       }
       // Reset the stage entry time to NOW so they lag for 1.5s after performance finishes
       this.stageEntryTime = this.time.now;
