@@ -25,6 +25,9 @@ const VOCALIST_DISPLAY_SCALE = 0.35;
 const GUITARIST_FRAME_WIDTH = 208;
 const GUITARIST_FRAME_HEIGHT = 216;
 const GUITARIST_DISPLAY_SCALE = 0.34;
+const BASSIST_FRAME_WIDTH = 224;
+const BASSIST_FRAME_HEIGHT = 216;
+const BASSIST_DISPLAY_SCALE = 0.34;
 const DRUMMER_FRAME_WIDTH = 229;
 const DRUMMER_FRAME_HEIGHT = 230;
 const DRUMMER_DISPLAY_SCALE = 0.34;
@@ -52,6 +55,16 @@ const GUITARIST_EDGE_VISIT_CHANCE = 0.36;
 const GUITARIST_PERFORMANCE_MIN_MS = 1200;
 const GUITARIST_PERFORMANCE_MAX_MS = 2600;
 const GUITARIST_TARGET_REACHED_RADIUS = 10;
+const BASSIST_WANDER_X_RANGE = 126;
+const BASSIST_WANDER_UP_RANGE = 34;
+const BASSIST_WANDER_DOWN_RANGE = 48;
+const BASSIST_MOVE_SPEED = 62;
+const BASSIST_HOME_STAY_CHANCE = 0.84;
+const BASSIST_RETURN_HOME_CHANCE = 0.74;
+const BASSIST_EDGE_VISIT_CHANCE = 0.36;
+const BASSIST_PERFORMANCE_MIN_MS = 1200;
+const BASSIST_PERFORMANCE_MAX_MS = 2600;
+const BASSIST_TARGET_REACHED_RADIUS = 10;
 const DRUMMER_PERFORMANCE_MIN_MS = 900;
 const DRUMMER_PERFORMANCE_MAX_MS = 1800;
 const ROADIE_HOME_POSITIONS = [
@@ -74,6 +87,7 @@ interface BeatEvent {
 type SecurityFacing = 'front' | 'back' | 'left' | 'right';
 type VocalistFacing = 'front' | 'back' | 'left' | 'right';
 type GuitaristFacing = 'front' | 'back' | 'left' | 'right';
+type BassistFacing = 'front' | 'back' | 'left' | 'right';
 type RoadieFacing = 'front' | 'back' | 'left' | 'right';
 type RoadieIdleSide = 'left' | 'right';
 type RoadiePushDirection = 'left' | 'right' | 'forward';
@@ -91,6 +105,7 @@ export default class GameScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private vocalist!: Phaser.Physics.Arcade.Sprite;
   private guitarist!: Phaser.Physics.Arcade.Sprite;
+  private bassist!: Phaser.Physics.Arcade.Sprite;
   private drummer!: Phaser.Physics.Arcade.Sprite;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: any;
@@ -170,6 +185,11 @@ export default class GameScene extends Phaser.Scene {
       frameHeight: GUITARIST_FRAME_HEIGHT
     });
 
+    this.load.spritesheet('bassist_sheet', 'assets/bassist-sheet.png', {
+      frameWidth: BASSIST_FRAME_WIDTH,
+      frameHeight: BASSIST_FRAME_HEIGHT
+    });
+
     this.load.spritesheet('drummer_sheet', 'assets/drummer-spritesheet.png', {
       frameWidth: DRUMMER_FRAME_WIDTH,
       frameHeight: DRUMMER_FRAME_HEIGHT
@@ -203,16 +223,6 @@ export default class GameScene extends Phaser.Scene {
     this.load.image('pa_speaker', 'assets/pa-speaker.png');
     this.load.image('stage_background', 'assets/stage-background.png');
 
-    // Bassist: with a longer bass shape
-    graphics.fillStyle(0xaa00ff, 1);
-    graphics.fillCircle(16, 16, 12);
-    graphics.fillStyle(0x333333, 1); // body
-    graphics.fillRect(4, 12, 10, 8);
-    graphics.fillStyle(0x555555, 1); // neck
-    graphics.fillRect(14, 14, 18, 4);
-    graphics.generateTexture('bassist', 32, 32);
-    graphics.clear();
-
     graphics.destroy();
   }
 
@@ -225,6 +235,7 @@ export default class GameScene extends Phaser.Scene {
     this.createRoadieAnimations();
     this.createVocalistAnimations();
     this.createGuitaristAnimations();
+    this.createBassistAnimations();
     this.createDrummerAnimations();
 
     this.crowdGroup = this.physics.add.group();
@@ -540,6 +551,42 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
+  private createBassistAnimations() {
+    if (this.anims.exists('bassist-idle-front')) {
+      return;
+    }
+
+    const animations: Array<{
+      key: string;
+      frames: number[];
+      frameRate: number;
+      repeat: number;
+    }> = [
+      { key: 'bassist-idle-front', frames: [0], frameRate: 1, repeat: -1 },
+      { key: 'bassist-idle-right', frames: [1], frameRate: 1, repeat: -1 },
+      { key: 'bassist-idle-left', frames: [2], frameRate: 1, repeat: -1 },
+      { key: 'bassist-idle-back', frames: [3], frameRate: 1, repeat: -1 },
+      { key: 'bassist-walk-front', frames: [4, 5], frameRate: 6, repeat: -1 },
+      { key: 'bassist-walk-right', frames: [4, 5], frameRate: 6, repeat: -1 },
+      { key: 'bassist-walk-left', frames: [6, 7], frameRate: 6, repeat: -1 },
+      { key: 'bassist-walk-back', frames: [6, 7], frameRate: 6, repeat: -1 },
+      { key: 'bassist-riff-front', frames: [8, 9, 10, 11], frameRate: 6, repeat: -1 },
+      { key: 'bassist-power-riff', frames: [12, 13, 14, 15], frameRate: 7, repeat: -1 },
+      { key: 'bassist-crowd-hype', frames: [16], frameRate: 1, repeat: -1 },
+      { key: 'bassist-low-solo', frames: [17, 18, 19], frameRate: 5, repeat: -1 },
+      { key: 'bassist-jump-solo', frames: [20, 21, 22], frameRate: 6, repeat: -1 }
+    ];
+
+    animations.forEach(({ key, frames, frameRate, repeat }) => {
+      this.anims.create({
+        key,
+        frames: this.anims.generateFrameNumbers('bassist_sheet', { frames }),
+        frameRate,
+        repeat
+      });
+    });
+  }
+
   private createDrummerAnimations() {
     if (this.anims.exists('drummer-idle')) {
       return;
@@ -598,6 +645,22 @@ export default class GameScene extends Phaser.Scene {
 
     if (this.guitarist.anims.currentAnim?.key !== animationKey) {
       this.guitarist.play(animationKey, true);
+    }
+  }
+
+  private configureBassistBody(bassist: Phaser.Physics.Arcade.Sprite) {
+    const body = bassist.body as Phaser.Physics.Arcade.Body | null;
+    if (!body) return;
+
+    body.setSize(62, 80);
+    body.setOffset(81, 130);
+  }
+
+  private playBassistAnimation(animationKey: string) {
+    if (!this.bassist) return;
+
+    if (this.bassist.anims.currentAnim?.key !== animationKey) {
+      this.bassist.play(animationKey, true);
     }
   }
 
@@ -744,6 +807,10 @@ export default class GameScene extends Phaser.Scene {
     return Phaser.Math.Between(GUITARIST_PERFORMANCE_MIN_MS, GUITARIST_PERFORMANCE_MAX_MS);
   }
 
+  private getRandomBassistPerformanceDuration() {
+    return Phaser.Math.Between(BASSIST_PERFORMANCE_MIN_MS, BASSIST_PERFORMANCE_MAX_MS);
+  }
+
   private isVocalistAtHome() {
     return (
       Phaser.Math.Distance.Between(
@@ -763,6 +830,17 @@ export default class GameScene extends Phaser.Scene {
         GUITARIST_HOME_POSITION.x,
         GUITARIST_HOME_POSITION.y
       ) <= GUITARIST_TARGET_REACHED_RADIUS
+    );
+  }
+
+  private isBassistAtHome() {
+    return (
+      Phaser.Math.Distance.Between(
+        this.bassist.x,
+        this.bassist.y,
+        BASSIST_HOME_POSITION.x,
+        BASSIST_HOME_POSITION.y
+      ) <= BASSIST_TARGET_REACHED_RADIUS
     );
   }
 
@@ -814,6 +892,39 @@ export default class GameScene extends Phaser.Scene {
     this.guitarist.setData('state', 'moving');
     this.guitarist.setData('targetX', targetX);
     this.guitarist.setData('targetY', targetY);
+  }
+
+  private getRandomBassistPerformance() {
+    return Phaser.Utils.Array.GetRandom([
+      'bassist-riff-front',
+      'bassist-riff-front',
+      'bassist-power-riff',
+      'bassist-power-riff',
+      'bassist-low-solo',
+      'bassist-jump-solo',
+      'bassist-idle-front'
+    ]);
+  }
+
+  private startBassistPerformance(time: number, atHome: boolean) {
+    const animationKey = atHome && Math.random() < 0.2
+      ? Phaser.Utils.Array.GetRandom([
+          'bassist-idle-front',
+          'bassist-idle-left',
+          'bassist-idle-right'
+        ])
+      : this.getRandomBassistPerformance();
+
+    this.bassist.setVelocity(0, 0);
+    this.bassist.setData('state', 'performing');
+    this.bassist.setData('stateUntil', time + this.getRandomBassistPerformanceDuration());
+    this.playBassistAnimation(animationKey);
+  }
+
+  private moveBassistTo(targetX: number, targetY: number) {
+    this.bassist.setData('state', 'moving');
+    this.bassist.setData('targetX', targetX);
+    this.bassist.setData('targetY', targetY);
   }
 
   private getRandomVocalistStageTarget() {
@@ -902,6 +1013,53 @@ export default class GameScene extends Phaser.Scene {
     };
   }
 
+  private getRandomBassistStageTarget() {
+    const visitStageEdge = Math.random() < BASSIST_EDGE_VISIT_CHANCE;
+    if (visitStageEdge) {
+      return {
+        x: Phaser.Math.Between(52, GAME_WIDTH - 52),
+        y: Phaser.Math.Between(STAGE_BOTTOM_Y - 34, STAGE_BOTTOM_Y - 18)
+      };
+    }
+
+    const minX = Phaser.Math.Clamp(
+      BASSIST_HOME_POSITION.x - BASSIST_WANDER_X_RANGE,
+      42,
+      GAME_WIDTH - 42
+    );
+    const maxX = Phaser.Math.Clamp(
+      BASSIST_HOME_POSITION.x + BASSIST_WANDER_X_RANGE,
+      42,
+      GAME_WIDTH - 42
+    );
+    const minY = Phaser.Math.Clamp(
+      BASSIST_HOME_POSITION.y - BASSIST_WANDER_UP_RANGE,
+      34,
+      STAGE_BOTTOM_Y - 18
+    );
+    const maxY = Phaser.Math.Clamp(
+      BASSIST_HOME_POSITION.y + BASSIST_WANDER_DOWN_RANGE,
+      34,
+      STAGE_BOTTOM_Y - 18
+    );
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const x = Phaser.Math.Between(minX, maxX);
+      const y = Phaser.Math.Between(minY, maxY);
+      if (
+        Phaser.Math.Distance.Between(x, y, BASSIST_HOME_POSITION.x, BASSIST_HOME_POSITION.y) >
+        24
+      ) {
+        return { x, y };
+      }
+    }
+
+    return {
+      x: Phaser.Math.Between(minX, maxX),
+      y: Phaser.Math.Between(minY, maxY)
+    };
+  }
+
   private chooseNextVocalistAction(time: number) {
     const atHome = this.isVocalistAtHome();
 
@@ -956,6 +1114,33 @@ export default class GameScene extends Phaser.Scene {
     this.moveGuitaristTo(nextSpot.x, nextSpot.y);
   }
 
+  private chooseNextBassistAction(time: number) {
+    const atHome = this.isBassistAtHome();
+
+    if (atHome) {
+      if (Math.random() < BASSIST_HOME_STAY_CHANCE) {
+        this.startBassistPerformance(time, true);
+      } else {
+        const nextSpot = this.getRandomBassistStageTarget();
+        this.moveBassistTo(nextSpot.x, nextSpot.y);
+      }
+      return;
+    }
+
+    if (Math.random() < BASSIST_RETURN_HOME_CHANCE) {
+      this.moveBassistTo(BASSIST_HOME_POSITION.x, BASSIST_HOME_POSITION.y);
+      return;
+    }
+
+    if (Math.random() < 0.65) {
+      this.startBassistPerformance(time, false);
+      return;
+    }
+
+    const nextSpot = this.getRandomBassistStageTarget();
+    this.moveBassistTo(nextSpot.x, nextSpot.y);
+  }
+
   private resetVocalistState(time: number) {
     if (!this.vocalist) return;
 
@@ -986,6 +1171,22 @@ export default class GameScene extends Phaser.Scene {
     this.guitarist.setData('targetX', GUITARIST_HOME_POSITION.x);
     this.guitarist.setData('targetY', GUITARIST_HOME_POSITION.y);
     this.startGuitaristPerformance(time, true);
+  }
+
+  private resetBassistState(time: number) {
+    if (!this.bassist) return;
+
+    this.bassist.setPosition(BASSIST_HOME_POSITION.x, BASSIST_HOME_POSITION.y);
+    this.bassist.setVelocity(0, 0);
+    if (!this.bassist.getData('onCooldown')) {
+      this.bassist.setAlpha(1);
+    }
+    this.bassist.setData('jammed', false);
+    this.bassist.setData('facing', 'front');
+    this.bassist.setData('state', 'performing');
+    this.bassist.setData('targetX', BASSIST_HOME_POSITION.x);
+    this.bassist.setData('targetY', BASSIST_HOME_POSITION.y);
+    this.startBassistPerformance(time, true);
   }
 
   private configureRoadieBody(roadie: Phaser.Physics.Arcade.Sprite) {
@@ -1105,7 +1306,7 @@ export default class GameScene extends Phaser.Scene {
       { x: VOCALIST_HOME_POSITION.x, y: VOCALIST_HOME_POSITION.y, key: 'vocalist_sheet', type: 'vocal', frame: 7 },
       { x: DRUMMER_HOME_POSITION.x, y: DRUMMER_HOME_POSITION.y, key: 'drummer_sheet', type: 'drum', frame: 0 },
       { x: GUITARIST_HOME_POSITION.x, y: GUITARIST_HOME_POSITION.y, key: 'guitarist_sheet', type: 'guitar', frame: 0 },
-      { x: BASSIST_HOME_POSITION.x, y: BASSIST_HOME_POSITION.y, key: 'bassist', type: 'bass' }
+      { x: BASSIST_HOME_POSITION.x, y: BASSIST_HOME_POSITION.y, key: 'bassist_sheet', type: 'bass', frame: 0 }
     ];
     
     band.forEach(m => {
@@ -1138,9 +1339,12 @@ export default class GameScene extends Phaser.Scene {
         this.configureDrummerBody(musician);
         this.resetDrummerState(this.time.now);
       } else if (m.type === 'bass') {
+        this.bassist = musician;
+        musician.setScale(BASSIST_DISPLAY_SCALE);
         musician.setDepth(BASSIST_DEPTH);
-        musician.setImmovable(true);
         musician.setPushable(false);
+        this.configureBassistBody(musician);
+        this.resetBassistState(this.time.now);
       }
     });
   }
@@ -1236,6 +1440,7 @@ export default class GameScene extends Phaser.Scene {
       const type = musician.getData('type');
 
       musician.setData('jammed', false);
+      musician.setData('onCooldown', false);
       musician.setAlpha(1);
       musician.setPosition(musician.getData('spawnX'), musician.getData('spawnY'));
 
@@ -1247,6 +1452,7 @@ export default class GameScene extends Phaser.Scene {
 
     this.resetVocalistState(this.time.now);
     this.resetGuitaristState(this.time.now);
+    this.resetBassistState(this.time.now);
     this.resetDrummerState(this.time.now);
   }
 
@@ -1263,6 +1469,7 @@ export default class GameScene extends Phaser.Scene {
     this.updatePlayerAnimation();
     this.updateVocalistAI(time);
     this.updateGuitaristAI(time);
+    this.updateBassistAI(time);
     this.updateDrummerAI(time);
     
     // If player is on stage, build hype quickly!
@@ -1388,6 +1595,8 @@ export default class GameScene extends Phaser.Scene {
       this.playVocalistAnimation('vocalist-hype-crowd');
     } else if (musician === this.guitarist) {
       this.playGuitaristAnimation('guitarist-crowd-hype');
+    } else if (musician === this.bassist) {
+      this.playBassistAnimation('bassist-crowd-hype');
     } else if (musician === this.drummer) {
       this.playDrummerAnimation('drummer-finale');
     }
@@ -1420,6 +1629,8 @@ export default class GameScene extends Phaser.Scene {
         this.startVocalistPerformance(this.time.now, this.isVocalistAtHome());
       } else if (musician === this.guitarist) {
         this.startGuitaristPerformance(this.time.now, this.isGuitaristAtHome());
+      } else if (musician === this.bassist) {
+        this.startBassistPerformance(this.time.now, this.isBassistAtHome());
       } else if (musician === this.drummer) {
         this.resetDrummerState(this.time.now);
       }
@@ -1867,6 +2078,62 @@ export default class GameScene extends Phaser.Scene {
     const stateUntil = (this.guitarist.getData('stateUntil') as number | undefined) ?? 0;
     if (time >= stateUntil) {
       this.chooseNextGuitaristAction(time);
+    }
+  }
+
+  private updateBassistAI(time: number) {
+    if (!this.bassist?.active) {
+      return;
+    }
+
+    if (this.bassist.getData('jammed')) {
+      this.bassist.setVelocity(0, 0);
+      return;
+    }
+
+    if (this.isPerforming) {
+      this.bassist.setVelocity(0, 0);
+      return;
+    }
+
+    const state = (this.bassist.getData('state') as string | undefined) ?? 'performing';
+    const targetX =
+      (this.bassist.getData('targetX') as number | undefined) ?? BASSIST_HOME_POSITION.x;
+    const targetY =
+      (this.bassist.getData('targetY') as number | undefined) ?? BASSIST_HOME_POSITION.y;
+
+    if (state === 'moving') {
+      const distance = Phaser.Math.Distance.Between(this.bassist.x, this.bassist.y, targetX, targetY);
+      if (distance <= BASSIST_TARGET_REACHED_RADIUS) {
+        this.bassist.setPosition(targetX, targetY);
+        this.startBassistPerformance(time, this.isBassistAtHome());
+        return;
+      }
+
+      this.physics.moveTo(this.bassist, targetX, targetY, BASSIST_MOVE_SPEED);
+      const velocity = this.bassist.body?.velocity;
+      const speedX = velocity?.x ?? 0;
+      const speedY = velocity?.y ?? 0;
+
+      let facing: BassistFacing =
+        (this.bassist.getData('facing') as BassistFacing | undefined) ?? 'front';
+
+      if (Math.abs(speedX) > Math.abs(speedY)) {
+        facing = speedX >= 0 ? 'right' : 'left';
+      } else if (Math.abs(speedY) > 2) {
+        facing = speedY >= 0 ? 'front' : 'back';
+      }
+
+      this.bassist.setData('facing', facing);
+      this.playBassistAnimation(`bassist-walk-${facing}`);
+      return;
+    }
+
+    this.bassist.setVelocity(0, 0);
+
+    const stateUntil = (this.bassist.getData('stateUntil') as number | undefined) ?? 0;
+    if (time >= stateUntil) {
+      this.chooseNextBassistAction(time);
     }
   }
 
