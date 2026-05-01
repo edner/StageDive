@@ -17,10 +17,15 @@ const ROADIE_DISPLAY_SCALE = 0.21;
 const VOCALIST_FRAME_WIDTH = 208;
 const VOCALIST_FRAME_HEIGHT = 248;
 const VOCALIST_DISPLAY_SCALE = 0.35;
+const GUITARIST_FRAME_WIDTH = 208;
+const GUITARIST_FRAME_HEIGHT = 216;
+const GUITARIST_DISPLAY_SCALE = 0.34;
 const DRUMMER_FRAME_WIDTH = 229;
 const DRUMMER_FRAME_HEIGHT = 230;
 const DRUMMER_DISPLAY_SCALE = 0.34;
 const VOCALIST_HOME_POSITION = { x: GAME_WIDTH / 2, y: 120 } as const;
+const GUITARIST_HOME_POSITION = { x: GAME_WIDTH / 2 - 82, y: 86 } as const;
+const BASSIST_HOME_POSITION = { x: GAME_WIDTH / 2 + 80, y: 86 } as const;
 const DRUMMER_HOME_POSITION = { x: GAME_WIDTH / 2, y: 30 } as const;
 const STAGE_INTERACTION_RADIUS = 70;
 const VOCALIST_WANDER_X_RANGE = 92;
@@ -32,6 +37,16 @@ const VOCALIST_RETURN_HOME_CHANCE = 0.9;
 const VOCALIST_PERFORMANCE_MIN_MS = 900;
 const VOCALIST_PERFORMANCE_MAX_MS = 2200;
 const VOCALIST_TARGET_REACHED_RADIUS = 8;
+const GUITARIST_WANDER_X_RANGE = 126;
+const GUITARIST_WANDER_UP_RANGE = 34;
+const GUITARIST_WANDER_DOWN_RANGE = 48;
+const GUITARIST_MOVE_SPEED = 62;
+const GUITARIST_HOME_STAY_CHANCE = 0.84;
+const GUITARIST_RETURN_HOME_CHANCE = 0.74;
+const GUITARIST_EDGE_VISIT_CHANCE = 0.36;
+const GUITARIST_PERFORMANCE_MIN_MS = 1200;
+const GUITARIST_PERFORMANCE_MAX_MS = 2600;
+const GUITARIST_TARGET_REACHED_RADIUS = 10;
 const DRUMMER_PERFORMANCE_MIN_MS = 900;
 const DRUMMER_PERFORMANCE_MAX_MS = 1800;
 const ROADIE_HOME_POSITIONS = [
@@ -53,6 +68,7 @@ interface BeatEvent {
 
 type SecurityFacing = 'front' | 'back' | 'left' | 'right';
 type VocalistFacing = 'front' | 'back' | 'left' | 'right';
+type GuitaristFacing = 'front' | 'back' | 'left' | 'right';
 type RoadieFacing = 'front' | 'back' | 'left' | 'right';
 type RoadieIdleSide = 'left' | 'right';
 type RoadiePushDirection = 'left' | 'right' | 'forward';
@@ -69,6 +85,7 @@ type PlayerSpecialAnimation =
 export default class GameScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private vocalist!: Phaser.Physics.Arcade.Sprite;
+  private guitarist!: Phaser.Physics.Arcade.Sprite;
   private drummer!: Phaser.Physics.Arcade.Sprite;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: any;
@@ -143,6 +160,11 @@ export default class GameScene extends Phaser.Scene {
       frameHeight: VOCALIST_FRAME_HEIGHT
     });
 
+    this.load.spritesheet('guitarist_sheet', 'assets/guitarist-sheet.png', {
+      frameWidth: GUITARIST_FRAME_WIDTH,
+      frameHeight: GUITARIST_FRAME_HEIGHT
+    });
+
     this.load.spritesheet('drummer_sheet', 'assets/drummer-spritesheet.png', {
       frameWidth: DRUMMER_FRAME_WIDTH,
       frameHeight: DRUMMER_FRAME_HEIGHT
@@ -176,16 +198,6 @@ export default class GameScene extends Phaser.Scene {
     this.load.image('pa_speaker', 'assets/pa-speaker.png');
     this.load.image('stage_background', 'assets/stage-background.png');
 
-    // Guitarist: with a stratocaster shape
-    graphics.fillStyle(0x00aaff, 1);
-    graphics.fillCircle(16, 16, 12);
-    graphics.fillStyle(0xffffff, 1); // pickguard
-    graphics.fillRect(6, 14, 10, 6);
-    graphics.fillStyle(0x8b4513, 1); // neck
-    graphics.fillRect(16, 15, 16, 4);
-    graphics.generateTexture('guitarist', 32, 32);
-    graphics.clear();
-    
     // Bassist: with a longer bass shape
     graphics.fillStyle(0xaa00ff, 1);
     graphics.fillCircle(16, 16, 12);
@@ -207,6 +219,7 @@ export default class GameScene extends Phaser.Scene {
     this.createSecurityChaserAnimations();
     this.createRoadieAnimations();
     this.createVocalistAnimations();
+    this.createGuitaristAnimations();
     this.createDrummerAnimations();
 
     this.crowdGroup = this.physics.add.group();
@@ -214,7 +227,7 @@ export default class GameScene extends Phaser.Scene {
     this.lineCrowdGroup = this.physics.add.group({ immovable: true });
     this.securityChaseGroup = this.physics.add.group();
     this.roadiesGroup = this.physics.add.group();
-    this.musiciansGroup = this.physics.add.group({ immovable: true });
+    this.musiciansGroup = this.physics.add.group();
 
     // Thick invisible barrier to prevent ALL crowd from invading the stage/security
     // Covers y = 0 to y = 250 (Center at 125, height 250)
@@ -263,8 +276,9 @@ export default class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.player, this.crowdGroup, this.handlePitCollision, undefined, this);
     this.physics.add.collider(this.player, this.lineCrowdGroup, this.handleLineCollision, undefined, this);
     this.physics.add.collider(this.crowdGroup, this.lineCrowdGroup);
+    this.physics.add.collider(this.musiciansGroup, this.musiciansGroup);
     this.physics.add.collider(this.roadiesGroup, this.musiciansGroup);
-    this.physics.add.collider(this.player, this.drummer);
+    this.physics.add.collider(this.player, this.musiciansGroup);
     
     // Player vs Security Wall
     this.physics.add.collider(this.player, this.securityBarrierGroup, (p: any, r: any) => {
@@ -485,6 +499,42 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
+  private createGuitaristAnimations() {
+    if (this.anims.exists('guitarist-idle-front')) {
+      return;
+    }
+
+    const animations: Array<{
+      key: string;
+      frames: number[];
+      frameRate: number;
+      repeat: number;
+    }> = [
+      { key: 'guitarist-idle-front', frames: [0], frameRate: 1, repeat: -1 },
+      { key: 'guitarist-idle-right', frames: [1], frameRate: 1, repeat: -1 },
+      { key: 'guitarist-idle-left', frames: [2], frameRate: 1, repeat: -1 },
+      { key: 'guitarist-idle-back', frames: [3], frameRate: 1, repeat: -1 },
+      { key: 'guitarist-walk-front', frames: [4, 5], frameRate: 6, repeat: -1 },
+      { key: 'guitarist-walk-right', frames: [4, 5], frameRate: 6, repeat: -1 },
+      { key: 'guitarist-walk-left', frames: [6, 7], frameRate: 6, repeat: -1 },
+      { key: 'guitarist-walk-back', frames: [6, 7], frameRate: 6, repeat: -1 },
+      { key: 'guitarist-riff-front', frames: [8, 9, 10, 11], frameRate: 6, repeat: -1 },
+      { key: 'guitarist-power-riff', frames: [12, 13, 14, 15], frameRate: 7, repeat: -1 },
+      { key: 'guitarist-crowd-hype', frames: [16], frameRate: 1, repeat: -1 },
+      { key: 'guitarist-low-solo', frames: [17, 18, 19], frameRate: 5, repeat: -1 },
+      { key: 'guitarist-jump-solo', frames: [20, 21, 22], frameRate: 6, repeat: -1 }
+    ];
+
+    animations.forEach(({ key, frames, frameRate, repeat }) => {
+      this.anims.create({
+        key,
+        frames: this.anims.generateFrameNumbers('guitarist_sheet', { frames }),
+        frameRate,
+        repeat
+      });
+    });
+  }
+
   private createDrummerAnimations() {
     if (this.anims.exists('drummer-idle')) {
       return;
@@ -527,6 +577,22 @@ export default class GameScene extends Phaser.Scene {
     if (this.vocalist.anims.currentAnim?.key !== animationKey || this.vocalist.flipX !== flipX) {
       this.vocalist.play(animationKey, true);
       this.vocalist.setFlipX(flipX);
+    }
+  }
+
+  private configureGuitaristBody(guitarist: Phaser.Physics.Arcade.Sprite) {
+    const body = guitarist.body as Phaser.Physics.Arcade.Body | null;
+    if (!body) return;
+
+    body.setSize(62, 80);
+    body.setOffset(73, 130);
+  }
+
+  private playGuitaristAnimation(animationKey: string) {
+    if (!this.guitarist) return;
+
+    if (this.guitarist.anims.currentAnim?.key !== animationKey) {
+      this.guitarist.play(animationKey, true);
     }
   }
 
@@ -669,6 +735,10 @@ export default class GameScene extends Phaser.Scene {
     return Phaser.Math.Between(VOCALIST_PERFORMANCE_MIN_MS, VOCALIST_PERFORMANCE_MAX_MS);
   }
 
+  private getRandomGuitaristPerformanceDuration() {
+    return Phaser.Math.Between(GUITARIST_PERFORMANCE_MIN_MS, GUITARIST_PERFORMANCE_MAX_MS);
+  }
+
   private isVocalistAtHome() {
     return (
       Phaser.Math.Distance.Between(
@@ -677,6 +747,17 @@ export default class GameScene extends Phaser.Scene {
         VOCALIST_HOME_POSITION.x,
         VOCALIST_HOME_POSITION.y
       ) <= VOCALIST_TARGET_REACHED_RADIUS
+    );
+  }
+
+  private isGuitaristAtHome() {
+    return (
+      Phaser.Math.Distance.Between(
+        this.guitarist.x,
+        this.guitarist.y,
+        GUITARIST_HOME_POSITION.x,
+        GUITARIST_HOME_POSITION.y
+      ) <= GUITARIST_TARGET_REACHED_RADIUS
     );
   }
 
@@ -695,6 +776,39 @@ export default class GameScene extends Phaser.Scene {
     this.vocalist.setData('state', 'moving');
     this.vocalist.setData('targetX', targetX);
     this.vocalist.setData('targetY', targetY);
+  }
+
+  private getRandomGuitaristPerformance() {
+    return Phaser.Utils.Array.GetRandom([
+      'guitarist-riff-front',
+      'guitarist-riff-front',
+      'guitarist-power-riff',
+      'guitarist-power-riff',
+      'guitarist-low-solo',
+      'guitarist-jump-solo',
+      'guitarist-idle-front'
+    ]);
+  }
+
+  private startGuitaristPerformance(time: number, atHome: boolean) {
+    const animationKey = atHome && Math.random() < 0.2
+      ? Phaser.Utils.Array.GetRandom([
+          'guitarist-idle-front',
+          'guitarist-idle-left',
+          'guitarist-idle-right'
+        ])
+      : this.getRandomGuitaristPerformance();
+
+    this.guitarist.setVelocity(0, 0);
+    this.guitarist.setData('state', 'performing');
+    this.guitarist.setData('stateUntil', time + this.getRandomGuitaristPerformanceDuration());
+    this.playGuitaristAnimation(animationKey);
+  }
+
+  private moveGuitaristTo(targetX: number, targetY: number) {
+    this.guitarist.setData('state', 'moving');
+    this.guitarist.setData('targetX', targetX);
+    this.guitarist.setData('targetY', targetY);
   }
 
   private getRandomVocalistStageTarget() {
@@ -736,6 +850,53 @@ export default class GameScene extends Phaser.Scene {
     };
   }
 
+  private getRandomGuitaristStageTarget() {
+    const visitStageEdge = Math.random() < GUITARIST_EDGE_VISIT_CHANCE;
+    if (visitStageEdge) {
+      return {
+        x: Phaser.Math.Between(52, GAME_WIDTH - 52),
+        y: Phaser.Math.Between(STAGE_BOTTOM_Y - 34, STAGE_BOTTOM_Y - 18)
+      };
+    }
+
+    const minX = Phaser.Math.Clamp(
+      GUITARIST_HOME_POSITION.x - GUITARIST_WANDER_X_RANGE,
+      42,
+      GAME_WIDTH - 42
+    );
+    const maxX = Phaser.Math.Clamp(
+      GUITARIST_HOME_POSITION.x + GUITARIST_WANDER_X_RANGE,
+      42,
+      GAME_WIDTH - 42
+    );
+    const minY = Phaser.Math.Clamp(
+      GUITARIST_HOME_POSITION.y - GUITARIST_WANDER_UP_RANGE,
+      34,
+      STAGE_BOTTOM_Y - 18
+    );
+    const maxY = Phaser.Math.Clamp(
+      GUITARIST_HOME_POSITION.y + GUITARIST_WANDER_DOWN_RANGE,
+      34,
+      STAGE_BOTTOM_Y - 18
+    );
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const x = Phaser.Math.Between(minX, maxX);
+      const y = Phaser.Math.Between(minY, maxY);
+      if (
+        Phaser.Math.Distance.Between(x, y, GUITARIST_HOME_POSITION.x, GUITARIST_HOME_POSITION.y) >
+        24
+      ) {
+        return { x, y };
+      }
+    }
+
+    return {
+      x: Phaser.Math.Between(minX, maxX),
+      y: Phaser.Math.Between(minY, maxY)
+    };
+  }
+
   private chooseNextVocalistAction(time: number) {
     const atHome = this.isVocalistAtHome();
 
@@ -763,6 +924,33 @@ export default class GameScene extends Phaser.Scene {
     this.moveVocalistTo(nextSpot.x, nextSpot.y);
   }
 
+  private chooseNextGuitaristAction(time: number) {
+    const atHome = this.isGuitaristAtHome();
+
+    if (atHome) {
+      if (Math.random() < GUITARIST_HOME_STAY_CHANCE) {
+        this.startGuitaristPerformance(time, true);
+      } else {
+        const nextSpot = this.getRandomGuitaristStageTarget();
+        this.moveGuitaristTo(nextSpot.x, nextSpot.y);
+      }
+      return;
+    }
+
+    if (Math.random() < GUITARIST_RETURN_HOME_CHANCE) {
+      this.moveGuitaristTo(GUITARIST_HOME_POSITION.x, GUITARIST_HOME_POSITION.y);
+      return;
+    }
+
+    if (Math.random() < 0.65) {
+      this.startGuitaristPerformance(time, false);
+      return;
+    }
+
+    const nextSpot = this.getRandomGuitaristStageTarget();
+    this.moveGuitaristTo(nextSpot.x, nextSpot.y);
+  }
+
   private resetVocalistState(time: number) {
     if (!this.vocalist) return;
 
@@ -777,6 +965,22 @@ export default class GameScene extends Phaser.Scene {
     this.vocalist.setData('targetX', VOCALIST_HOME_POSITION.x);
     this.vocalist.setData('targetY', VOCALIST_HOME_POSITION.y);
     this.startVocalistPerformance(time, true);
+  }
+
+  private resetGuitaristState(time: number) {
+    if (!this.guitarist) return;
+
+    this.guitarist.setPosition(GUITARIST_HOME_POSITION.x, GUITARIST_HOME_POSITION.y);
+    this.guitarist.setVelocity(0, 0);
+    if (!this.guitarist.getData('onCooldown')) {
+      this.guitarist.setAlpha(1);
+    }
+    this.guitarist.setData('jammed', false);
+    this.guitarist.setData('facing', 'front');
+    this.guitarist.setData('state', 'performing');
+    this.guitarist.setData('targetX', GUITARIST_HOME_POSITION.x);
+    this.guitarist.setData('targetY', GUITARIST_HOME_POSITION.y);
+    this.startGuitaristPerformance(time, true);
   }
 
   private configureRoadieBody(roadie: Phaser.Physics.Arcade.Sprite) {
@@ -893,8 +1097,8 @@ export default class GameScene extends Phaser.Scene {
     const band = [
       { x: VOCALIST_HOME_POSITION.x, y: VOCALIST_HOME_POSITION.y, key: 'vocalist_sheet', type: 'vocal', frame: 7 },
       { x: DRUMMER_HOME_POSITION.x, y: DRUMMER_HOME_POSITION.y, key: 'drummer_sheet', type: 'drum', frame: 0 },
-      { x: GAME_WIDTH / 2 - 80, y: 80, key: 'guitarist', type: 'guitar' },
-      { x: GAME_WIDTH / 2 + 80, y: 80, key: 'bassist', type: 'bass' }
+      { x: GUITARIST_HOME_POSITION.x, y: GUITARIST_HOME_POSITION.y, key: 'guitarist_sheet', type: 'guitar', frame: 0 },
+      { x: BASSIST_HOME_POSITION.x, y: BASSIST_HOME_POSITION.y, key: 'bassist', type: 'bass' }
     ];
     
     band.forEach(m => {
@@ -902,21 +1106,30 @@ export default class GameScene extends Phaser.Scene {
       musician.setData('type', m.type);
       musician.setData('spawnX', m.x);
       musician.setData('spawnY', m.y);
+      musician.setCollideWorldBounds(true);
 
       if (m.type === 'vocal') {
         this.vocalist = musician;
         musician.setScale(VOCALIST_DISPLAY_SCALE);
-        musician.setCollideWorldBounds(true);
+        musician.setPushable(false);
         this.configureVocalistBody(musician);
         this.resetVocalistState(this.time.now);
+      } else if (m.type === 'guitar') {
+        this.guitarist = musician;
+        musician.setScale(GUITARIST_DISPLAY_SCALE);
+        musician.setPushable(false);
+        this.configureGuitaristBody(musician);
+        this.resetGuitaristState(this.time.now);
       } else if (m.type === 'drum') {
         this.drummer = musician;
         musician.setScale(DRUMMER_DISPLAY_SCALE);
-        musician.setCollideWorldBounds(true);
         musician.setImmovable(true);
         musician.setPushable(false);
         this.configureDrummerBody(musician);
         this.resetDrummerState(this.time.now);
+      } else if (m.type === 'bass') {
+        musician.setImmovable(true);
+        musician.setPushable(false);
       }
     });
   }
@@ -1029,6 +1242,7 @@ export default class GameScene extends Phaser.Scene {
 
     this.updatePlayerAnimation();
     this.updateVocalistAI(time);
+    this.updateGuitaristAI(time);
     this.updateDrummerAI(time);
     
     // If player is on stage, build hype quickly!
@@ -1152,6 +1366,8 @@ export default class GameScene extends Phaser.Scene {
 
     if (musician === this.vocalist) {
       this.playVocalistAnimation('vocalist-hype-crowd');
+    } else if (musician === this.guitarist) {
+      this.playGuitaristAnimation('guitarist-crowd-hype');
     } else if (musician === this.drummer) {
       this.playDrummerAnimation('drummer-finale');
     }
@@ -1182,6 +1398,8 @@ export default class GameScene extends Phaser.Scene {
       
       if (musician === this.vocalist) {
         this.startVocalistPerformance(this.time.now, this.isVocalistAtHome());
+      } else if (musician === this.guitarist) {
+        this.startGuitaristPerformance(this.time.now, this.isGuitaristAtHome());
       } else if (musician === this.drummer) {
         this.resetDrummerState(this.time.now);
       }
@@ -1573,6 +1791,62 @@ export default class GameScene extends Phaser.Scene {
     const stateUntil = (this.vocalist.getData('stateUntil') as number | undefined) ?? 0;
     if (time >= stateUntil) {
       this.chooseNextVocalistAction(time);
+    }
+  }
+
+  private updateGuitaristAI(time: number) {
+    if (!this.guitarist?.active) {
+      return;
+    }
+
+    if (this.guitarist.getData('jammed')) {
+      this.guitarist.setVelocity(0, 0);
+      return;
+    }
+
+    if (this.isPerforming) {
+      this.guitarist.setVelocity(0, 0);
+      return;
+    }
+
+    const state = (this.guitarist.getData('state') as string | undefined) ?? 'performing';
+    const targetX =
+      (this.guitarist.getData('targetX') as number | undefined) ?? GUITARIST_HOME_POSITION.x;
+    const targetY =
+      (this.guitarist.getData('targetY') as number | undefined) ?? GUITARIST_HOME_POSITION.y;
+
+    if (state === 'moving') {
+      const distance = Phaser.Math.Distance.Between(this.guitarist.x, this.guitarist.y, targetX, targetY);
+      if (distance <= GUITARIST_TARGET_REACHED_RADIUS) {
+        this.guitarist.setPosition(targetX, targetY);
+        this.startGuitaristPerformance(time, this.isGuitaristAtHome());
+        return;
+      }
+
+      this.physics.moveTo(this.guitarist, targetX, targetY, GUITARIST_MOVE_SPEED);
+      const velocity = this.guitarist.body?.velocity;
+      const speedX = velocity?.x ?? 0;
+      const speedY = velocity?.y ?? 0;
+
+      let facing: GuitaristFacing =
+        (this.guitarist.getData('facing') as GuitaristFacing | undefined) ?? 'front';
+
+      if (Math.abs(speedX) > Math.abs(speedY)) {
+        facing = speedX >= 0 ? 'right' : 'left';
+      } else if (Math.abs(speedY) > 2) {
+        facing = speedY >= 0 ? 'front' : 'back';
+      }
+
+      this.guitarist.setData('facing', facing);
+      this.playGuitaristAnimation(`guitarist-walk-${facing}`);
+      return;
+    }
+
+    this.guitarist.setVelocity(0, 0);
+
+    const stateUntil = (this.guitarist.getData('stateUntil') as number | undefined) ?? 0;
+    if (time >= stateUntil) {
+      this.chooseNextGuitaristAction(time);
     }
   }
 
