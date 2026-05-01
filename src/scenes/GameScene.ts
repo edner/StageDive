@@ -1087,8 +1087,8 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private performCrowdPush() {
-    const pushRadius = 80;
-    const pushDistance = 120;
+    const pushRadius = 40;
+    const pushDistance = 20;
     let pushed = 0;
     
     const allCrowd = [...this.crowdGroup.getChildren(), ...this.lineCrowdGroup.getChildren()];
