@@ -9,6 +9,11 @@ const PLAYER_FRAME_HEIGHT = 128;
 const PLAYER_DISPLAY_SCALE = 0.46;
 const PLAYER_BASE_DEPTH = 10;
 const PLAYER_CROWD_SURF_DEPTH = 90;
+const DRUMMER_DEPTH = 5;
+const GUITARIST_DEPTH = 6;
+const BASSIST_DEPTH = 6;
+const ROADIE_DEPTH = 7;
+const VOCALIST_DEPTH = 8;
 const EPIC_CROWD_SURF_DURATION = 5600;
 const SECURITY_CHASER_FRAME_SIZE = 96;
 const ROADIE_FRAME_WIDTH = 224;
@@ -996,6 +1001,7 @@ export default class GameScene extends Phaser.Scene {
     if (!homePosition) return;
 
     roadie.setPosition(homePosition.x, homePosition.y);
+    roadie.setDepth(ROADIE_DEPTH);
     roadie.setVelocity(0, 0);
     roadie.setData('homeIndex', index);
     roadie.setData('homeX', homePosition.x);
@@ -1089,6 +1095,7 @@ export default class GameScene extends Phaser.Scene {
 
     roadie.setScale(ROADIE_DISPLAY_SCALE);
     roadie.setCollideWorldBounds(true);
+    roadie.setDepth(ROADIE_DEPTH);
     this.configureRoadieBody(roadie);
     this.resetRoadieToHome(roadie, startIndex);
   }
@@ -1111,23 +1118,27 @@ export default class GameScene extends Phaser.Scene {
       if (m.type === 'vocal') {
         this.vocalist = musician;
         musician.setScale(VOCALIST_DISPLAY_SCALE);
+        musician.setDepth(VOCALIST_DEPTH);
         musician.setPushable(false);
         this.configureVocalistBody(musician);
         this.resetVocalistState(this.time.now);
       } else if (m.type === 'guitar') {
         this.guitarist = musician;
         musician.setScale(GUITARIST_DISPLAY_SCALE);
+        musician.setDepth(GUITARIST_DEPTH);
         musician.setPushable(false);
         this.configureGuitaristBody(musician);
         this.resetGuitaristState(this.time.now);
       } else if (m.type === 'drum') {
         this.drummer = musician;
         musician.setScale(DRUMMER_DISPLAY_SCALE);
+        musician.setDepth(DRUMMER_DEPTH);
         musician.setImmovable(true);
         musician.setPushable(false);
         this.configureDrummerBody(musician);
         this.resetDrummerState(this.time.now);
       } else if (m.type === 'bass') {
+        musician.setDepth(BASSIST_DEPTH);
         musician.setImmovable(true);
         musician.setPushable(false);
       }
@@ -1221,12 +1232,21 @@ export default class GameScene extends Phaser.Scene {
     });
 
     this.musiciansGroup.getChildren().forEach((child: any) => {
-      child.setData('jammed', false);
-      child.setAlpha(1);
-      child.setPosition(child.getData('spawnX'), child.getData('spawnY'));
+      const musician = child as Phaser.Physics.Arcade.Sprite;
+      const type = musician.getData('type');
+
+      musician.setData('jammed', false);
+      musician.setAlpha(1);
+      musician.setPosition(musician.getData('spawnX'), musician.getData('spawnY'));
+
+      if (type === 'vocal') musician.setDepth(VOCALIST_DEPTH);
+      else if (type === 'guitar') musician.setDepth(GUITARIST_DEPTH);
+      else if (type === 'drum') musician.setDepth(DRUMMER_DEPTH);
+      else if (type === 'bass') musician.setDepth(BASSIST_DEPTH);
     });
 
     this.resetVocalistState(this.time.now);
+    this.resetGuitaristState(this.time.now);
     this.resetDrummerState(this.time.now);
   }
 
