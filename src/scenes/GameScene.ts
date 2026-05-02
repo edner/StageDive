@@ -813,6 +813,26 @@ export default class GameScene extends Phaser.Scene {
     entity.setDepth(normalizedDepth);
   }
 
+  private updatePlayerDepth() {
+    const body = this.player.body as Phaser.Physics.Arcade.Body | null;
+    if (!body || !body.enable || this.player.depth === PLAYER_CROWD_SURF_DEPTH) {
+      return;
+    }
+
+    if (this.player.y >= SECURITY_BOTTOM_Y) {
+      const sortY = body.bottom;
+      const normalizedDepth = Phaser.Math.Clamp(
+        (sortY / GAME_HEIGHT) * (PLAYER_BASE_DEPTH - 2),
+        1,
+        PLAYER_BASE_DEPTH - 1
+      );
+      this.player.setDepth(normalizedDepth);
+      return;
+    }
+
+    this.player.setDepth(PLAYER_BASE_DEPTH);
+  }
+
   private getCrowdFacingFromVelocity(
     velocityX: number,
     velocityY: number,
@@ -2015,6 +2035,8 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private updatePlayerAnimation() {
+    this.updatePlayerDepth();
+
     if (this.playerSpecialAnimation) {
       this.playPlayerAnimation(`player-${this.playerSpecialAnimation}`);
       return;
@@ -2592,7 +2614,7 @@ export default class GameScene extends Phaser.Scene {
       this.isDiving = true;
       this.player.setVelocity(0, 0);
       this.setPlayerSpecialAnimation('beated');
-      this.showGameOver('MAULED\nBY CROWD!', '#ff6600');
+      this.showGameOver('  MAULED\nBY CROWD!', '#ff6600');
     }
   }
 
@@ -2789,7 +2811,7 @@ export default class GameScene extends Phaser.Scene {
     
     if (forcedByRoadie) {
       endY = STAGE_BOTTOM_Y + 100;
-      resultText = "BUSTED BY ROADIES!";
+      resultText = "   BUSTED\nBY ROADIES!";
       color = "#ff0000";
       isFail = true;
     } else if (this.hype < 300) {
@@ -2854,7 +2876,7 @@ export default class GameScene extends Phaser.Scene {
               this.crowdGroup.getChildren().forEach((child: any) => {
                 if (Math.abs(child.y - this.player.y) < 60 && Math.abs(child.x - this.player.x) < 80) {
                   if (!this.tweens.isTweening(child)) {
-                    this.tweens.add({ targets: child, scaleY: 1.2, scaleX: 1.2, yoyo: true, duration: 200 });
+                    this.tweens.add({ targets: child, scaleY: 0.8, scaleX: 0.8, yoyo: true, duration: 200 });
                   }
                 }
               });
