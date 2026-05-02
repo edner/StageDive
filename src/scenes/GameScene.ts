@@ -23,6 +23,8 @@ const BASSIST_DEPTH = 6;
 const ROADIE_DEPTH = 7;
 const VOCALIST_DEPTH = 8;
 const EPIC_CROWD_SURF_DURATION = 5600;
+const EPIC_SURF_STROBE_FLASH_INTERVAL_MS = 95;
+const EPIC_SURF_STROBE_FLASH_DURATION_MS = 70;
 const SECURITY_CHASER_FRAME_SIZE = 96;
 const ROADIE_FRAME_WIDTH = 224;
 const ROADIE_FRAME_HEIGHT = 288;
@@ -109,6 +111,21 @@ const RAGE_PUSH_RADIUS_MIN = 28;
 const RAGE_PUSH_RADIUS_MAX = 56;
 const RAGE_PUSH_DISTANCE_MIN = 8;
 const RAGE_PUSH_DISTANCE_MAX = 32;
+const SCORE_STORAGE_KEY = 'stagedive.arcade.highscores.v1';
+const SCORE_SURVIVAL_BONUS_INTERVAL_SECONDS = 60;
+const SCORE_SURVIVAL_BONUS = 1200;
+const SCORE_STAGE_ENTRY = 250;
+const SCORE_CROWD_PUSH_PER_TARGET = 15;
+const SCORE_BUILD_EVENT = 120;
+const SCORE_DROP_EVENT = 180;
+const SCORE_PEAK_EVENT = 240;
+const SCORE_BONUS_ACTION = 800;
+const SCORE_STAGE_DIVE_FACEPLANT = 125;
+const SCORE_STAGE_DIVE_CAUGHT = 450;
+const SCORE_STAGE_DIVE_SURF = 1400;
+const SCORE_EPIC_SURF_LIFE_BONUS = 300;
+const SCORE_TOP10_LIMIT = 10;
+const SCORE_NAME_MAX_LENGTH = 8;
 const AGGRO_CROWD_VARIANTS = [
   { textureKey: 'aggro_crowd_1_sheet', animationPrefix: 'aggro-crowd-1' },
   { textureKey: 'aggro_crowd_2_sheet', animationPrefix: 'aggro-crowd-2' },
@@ -132,6 +149,11 @@ const STAGE_CASE_PLATFORMS = [
 interface BeatEvent {
   time: number;
   type: 'build' | 'drop' | 'peak';
+}
+
+interface HighScoreEntry {
+  name: string;
+  score: number;
 }
 
 type SecurityFacing = 'front' | 'back' | 'left' | 'right';
@@ -173,6 +195,8 @@ export default class GameScene extends Phaser.Scene {
   
   private hype: number = 0;
   private hypeText!: Phaser.GameObjects.Text;
+  private score: number = 0;
+  private scoreText!: Phaser.GameObjects.Text;
   private lives: number = 6;
   private livesText!: Phaser.GameObjects.Text;
   private rage: number = 0;
@@ -189,10 +213,12 @@ export default class GameScene extends Phaser.Scene {
   private aggroHitCount: number = 0;
   private playerStageLevel: 'crowd' | 'stage' | 'case' = 'crowd';
   private playerStageTransitionUntil: number = 0;
+  private playerWasOnStage: boolean = false;
   
   // Music logic
   private musicTime: number = 0;
   private currentEventIndex: number = 0;
+  private survivalBonusesAwarded: number = 0;
   private beatMap: { bpm: number; events: BeatEvent[] } = {
     bpm: 120,
     events: [
@@ -357,6 +383,10 @@ export default class GameScene extends Phaser.Scene {
     this.hypeText = this.add.text(10, GAME_HEIGHT - 66, 'HYPE: 0', {
       fontFamily: 'Outfit', fontSize: '24px', color: '#fff', stroke: '#ff0066', strokeThickness: 4
     }).setDepth(100);
+
+    this.scoreText = this.add.text(GAME_WIDTH - 10, GAME_HEIGHT - 36, 'SCORE 0', {
+      fontFamily: 'Outfit', fontSize: '24px', color: '#ffe27a', stroke: '#000', strokeThickness: 4
+    }).setOrigin(1, 0).setDepth(100);
 
     this.livesText = this.add.text(GAME_WIDTH - 10, GAME_HEIGHT - 66, '♥♥♥', {
       fontFamily: 'Outfit', fontSize: '24px', color: '#ff0000', stroke: '#fff', strokeThickness: 2
@@ -1840,13 +1870,16 @@ export default class GameScene extends Phaser.Scene {
 
   private resetGameVariables() {
     this.hype = 0;
+    this.score = 0;
     this.lives = 6;
     if (this.livesText) this.updateLivesDisplay();
+    this.updateScoreUI();
     this.rage = 0;
     this.rageActive = false;
     this.updateRageUI();
     this.musicTime = 0;
     this.currentEventIndex = 0;
+    this.survivalBonusesAwarded = 0;
     this.isDiving = false;
     this.isPerforming = false;
     this.stageEntryTime = 0;
@@ -1857,6 +1890,7 @@ export default class GameScene extends Phaser.Scene {
     this.aggroHitCount = 0;
     this.playerStageLevel = 'crowd';
     this.playerStageTransitionUntil = 0;
+    this.playerWasOnStage = false;
     this.extraCrowdPending = 0;
     this.extraCrowdTotal = 0;
     this.extraCrowdTriggered = false;
@@ -1953,6 +1987,7 @@ export default class GameScene extends Phaser.Scene {
     if (!DEBUG_COLLISION_ONLY) {
       this.musicTime += delta / 1000;
       this.processBeatEvents();
+      this.processSurvivalScoreBonuses();
       this.updateRage(delta);
     }
 
@@ -1971,8 +2006,16 @@ export default class GameScene extends Phaser.Scene {
     this.updateBassistAI(time);
     this.updateDrummerAI(time);
     
+    const isOnStage = this.player.y < STAGE_BOTTOM_Y;
+
+    if (isOnStage && !this.playerWasOnStage) {
+      this.addScore(SCORE_STAGE_ENTRY);
+    }
+
+    this.playerWasOnStage = isOnStage;
+
     // If player is on stage, build hype quickly!
-    if (this.player.y < STAGE_BOTTOM_Y && !this.isPerforming) {
+    if (isOnStage && !this.isPerforming) {
       if (this.stageEntryTime === 0) {
         this.stageEntryTime = time;
         // Show spacebar hint
@@ -2063,6 +2106,7 @@ export default class GameScene extends Phaser.Scene {
     if (pushed > 0) {
       this.cameras.main.shake(80, 0.005);
       this.updateHype(this.hype + pushed * 2);
+      this.addScore(pushed * SCORE_CROWD_PUSH_PER_TARGET);
       
       // Visual flash
       const ring = this.add.circle(this.player.x, this.player.y, 10, 0xffcc33, 0.55).setDepth(150);
@@ -2095,6 +2139,7 @@ export default class GameScene extends Phaser.Scene {
     if (type === 'bass') textStr = "SLAPPIN BASS!";
     
     this.updateHype(this.hype + points);
+    this.addScore(SCORE_BONUS_ACTION);
 
     if (musician === this.vocalist) {
       this.playVocalistAnimation('vocalist-hype-crowd');
@@ -2172,6 +2217,7 @@ export default class GameScene extends Phaser.Scene {
         this.lineSpawnRate = 800;
         this.lineBaseSpeed = 140;
         this.queueExtraCrowdReinforcements();
+        this.addScore(SCORE_BUILD_EVENT);
         break;
       case 'drop':
         this.pushForce = -120; 
@@ -2179,6 +2225,7 @@ export default class GameScene extends Phaser.Scene {
         this.physicsBounce = 0.8; 
         this.lineSpawnRate = 400;
         this.lineBaseSpeed = 220;
+        this.addScore(SCORE_DROP_EVENT);
         break;
       case 'peak':
         this.pushForce = -80;
@@ -2186,6 +2233,7 @@ export default class GameScene extends Phaser.Scene {
         this.physicsBounce = 0.6;
         this.lineSpawnRate = 600;
         this.lineBaseSpeed = 180;
+        this.addScore(SCORE_PEAK_EVENT);
         break;
     }
     
@@ -2921,6 +2969,75 @@ export default class GameScene extends Phaser.Scene {
     else this.hypeText.setColor('#ff00ff');
   }
 
+  private addScore(amount: number) {
+    this.score = Math.max(0, this.score + amount);
+    this.updateScoreUI();
+  }
+
+  private processSurvivalScoreBonuses() {
+    const reachedBonuses = Math.floor(this.musicTime / SCORE_SURVIVAL_BONUS_INTERVAL_SECONDS);
+    while (this.survivalBonusesAwarded < reachedBonuses) {
+      this.survivalBonusesAwarded += 1;
+      this.addScore(SCORE_SURVIVAL_BONUS);
+      this.showFeedbackText('SURVIVAL BONUS!', '#ffe27a');
+    }
+  }
+
+  private updateScoreUI() {
+    if (!this.scoreText) return;
+    this.scoreText.setText(`SCORE ${Math.floor(this.score)}`);
+  }
+
+  private loadHighScores(): HighScoreEntry[] {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return [];
+    }
+
+    try {
+      const raw = window.localStorage.getItem(SCORE_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as HighScoreEntry[];
+      if (!Array.isArray(parsed)) return [];
+
+      return parsed
+        .filter((entry) => entry && typeof entry.name === 'string' && typeof entry.score === 'number')
+        .map((entry) => ({
+          name: entry.name.slice(0, SCORE_NAME_MAX_LENGTH).toUpperCase(),
+          score: Math.max(0, Math.floor(entry.score))
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, SCORE_TOP10_LIMIT);
+    } catch {
+      return [];
+    }
+  }
+
+  private saveHighScores(scores: HighScoreEntry[]) {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      SCORE_STORAGE_KEY,
+      JSON.stringify(scores.slice(0, SCORE_TOP10_LIMIT))
+    );
+  }
+
+  private buildUpdatedHighScores(name: string, score: number) {
+    const entries = [...this.loadHighScores(), {
+      name: name.slice(0, SCORE_NAME_MAX_LENGTH).toUpperCase(),
+      score: Math.max(0, Math.floor(score))
+    }];
+
+    return entries.sort((a, b) => b.score - a.score).slice(0, SCORE_TOP10_LIMIT);
+  }
+
+  private qualifiesForHighScore(score: number) {
+    const entries = this.loadHighScores();
+    if (entries.length < SCORE_TOP10_LIMIT) return true;
+    return score > entries[entries.length - 1].score;
+  }
+
   private updateRageUI() {
     if (!this.rageBar || !this.rageText) return;
 
@@ -3021,18 +3138,50 @@ export default class GameScene extends Phaser.Scene {
     this.setPlayerCrowdSurfMode(false);
     this.playerStageLevel = 'crowd';
     this.playerStageTransitionUntil = 0;
+    this.playerWasOnStage = false;
     this.syncPlayerStageScale();
     this.setPlayerSpecialAnimation(null);
     this.playPlayerAnimation('player-idle-front');
     this.updateHype(0);
   }
 
-  private showFeedbackText(text: string, color: string) {
+  private showFeedbackText(text: string, color: string, duration: number = 2000) {
     const feedbackText = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2, text, {
       fontFamily: 'Outfit', fontSize: '42px', fontStyle: '900', color: color, stroke: '#000', strokeThickness: 4
     }).setOrigin(0.5).setDepth(200);
     this.tweens.add({
-      targets: feedbackText, y: GAME_HEIGHT/2 - 50, alpha: 0, duration: 2000, ease: 'Power2', onComplete: () => feedbackText.destroy()
+      targets: feedbackText, y: GAME_HEIGHT/2 - 50, alpha: 0, duration, ease: 'Power2', onComplete: () => feedbackText.destroy()
+    });
+  }
+
+  private triggerEpicSurfCelebration() {
+    const strobePalette: Array<[number, number, number]> = [
+      [255, 0, 255],
+      [255, 255, 255],
+      [255, 80, 0],
+      [0, 255, 255],
+      [255, 0, 180],
+      [255, 255, 120],
+      [255, 64, 64],
+      [180, 255, 255]
+    ];
+
+    strobePalette.forEach(([r, g, b], index) => {
+      this.time.delayedCall(index * EPIC_SURF_STROBE_FLASH_INTERVAL_MS, () => {
+        this.cameras.main.shake(EPIC_SURF_STROBE_FLASH_DURATION_MS, 0.009 + index * 0.001);
+        this.cameras.main.flash(EPIC_SURF_STROBE_FLASH_DURATION_MS, r, g, b);
+      });
+    });
+
+    this.tweens.add({
+      targets: this.player,
+      angle: { from: -10, to: 10 },
+      scaleX: this.player.scaleX * 1.08,
+      scaleY: this.player.scaleY * 1.08,
+      duration: 90,
+      yoyo: true,
+      repeat: strobePalette.length - 1,
+      ease: 'Sine.easeInOut'
     });
   }
 
@@ -3146,6 +3295,9 @@ export default class GameScene extends Phaser.Scene {
       ease: 'Sine.easeInOut',
       onComplete: () => {
         if (isFail) {
+          if (!forcedByRoadie) {
+            this.addScore(SCORE_STAGE_DIVE_FACEPLANT);
+          }
           this.setPlayerSpecialAnimation('faceplant');
           this.lives -= 2;
           this.updateLivesDisplay();
@@ -3160,6 +3312,7 @@ export default class GameScene extends Phaser.Scene {
             this.time.delayedCall(1500, () => this.respawnPlayer());
           }
         } else if (isEpic) {
+          this.addScore(SCORE_STAGE_DIVE_SURF);
           this.setPlayerSpecialAnimation('crowd-surf-up');
           this.setPlayerCrowdSurfMode(true);
           this.carryPlayerByCrowd(
@@ -3176,15 +3329,19 @@ export default class GameScene extends Phaser.Scene {
               });
             },
             () => {
+              const gainedLife = this.lives < 6;
               if (this.lives < 6) {
                 this.lives = Math.min(this.lives + 2, 6);
                 this.updateLivesDisplay();
+                this.addScore(SCORE_EPIC_SURF_LIFE_BONUS);
               }
-              this.showFeedbackText("EPIC SURF! +1 LIFE!", color);
-              this.time.delayedCall(1500, () => this.respawnPlayer());
+              this.triggerEpicSurfCelebration();
+              this.showFeedbackText(gainedLife ? "EPIC SURF! +1 LIFE!" : "EPIC SURF!", color, 2800);
+              this.time.delayedCall(2200, () => this.respawnPlayer());
             }
           );
         } else {
+          this.addScore(SCORE_STAGE_DIVE_CAUGHT);
           this.setPlayerSpecialAnimation('crowd-surf-up');
           this.setPlayerCrowdSurfMode(true);
           this.showFeedbackText(resultText, color);
@@ -3202,34 +3359,133 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private showGameOver(text: string, color: string) {
-    const bg = this.add.rectangle(GAME_WIDTH/2, GAME_HEIGHT/2, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.8);
+    const finalScore = Math.floor(this.score);
+    const qualifies = this.qualifiesForHighScore(finalScore);
+    const bg = this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.86);
     bg.setDepth(200);
-    
-    const result = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2 - 50, text, {
-      fontFamily: 'Outfit', fontSize: '42px', fontStyle: '900', color: color
-    }).setOrigin(0.5).setDepth(201);
-    
-    const score = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2 + 20, `HYPE SCORE: ${Math.floor(this.hype)}`, {
-      fontFamily: 'Outfit', fontSize: '24px', color: '#fff'
+
+    const result = this.add.text(GAME_WIDTH / 2, 78, text, {
+      fontFamily: 'Outfit', fontSize: '38px', fontStyle: '900', color: color, align: 'center'
     }).setOrigin(0.5).setDepth(201);
 
-    const restartBtn = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2 + 100, '> RESTART <', {
+    const finalScoreText = this.add.text(GAME_WIDTH / 2, 150, `SCORE ${finalScore}`, {
+      fontFamily: 'Outfit', fontSize: '28px', color: '#ffe27a', stroke: '#000', strokeThickness: 4
+    }).setOrigin(0.5).setDepth(201);
+
+    const hypeScoreText = this.add.text(GAME_WIDTH / 2, 180, `HYPE ${Math.floor(this.hype)}`, {
+      fontFamily: 'Outfit', fontSize: '18px', color: '#ffffff', stroke: '#000', strokeThickness: 3
+    }).setOrigin(0.5).setDepth(201);
+
+    const rankingTitle = this.add.text(GAME_WIDTH / 2, 222, 'TOP 10', {
+      fontFamily: 'Outfit', fontSize: '24px', color: '#00ffff', fontStyle: '900', stroke: '#000', strokeThickness: 4
+    }).setOrigin(0.5).setDepth(201);
+
+    const highScores = this.loadHighScores();
+    const rankingText = this.add.text(36, 254, '', {
+      fontFamily: 'monospace', fontSize: '18px', color: '#ffffff', stroke: '#000', strokeThickness: 2, lineSpacing: 6
+    }).setDepth(201);
+
+    const promptText = this.add.text(GAME_WIDTH / 2, 560, '', {
+      fontFamily: 'Outfit', fontSize: '18px', color: '#ffdd55', stroke: '#000', strokeThickness: 3, align: 'center'
+    }).setOrigin(0.5).setDepth(201);
+
+    const nameEntryText = this.add.text(GAME_WIDTH / 2, 600, '', {
+      fontFamily: 'Outfit', fontSize: '28px', color: '#ffffff', stroke: '#000', strokeThickness: 4
+    }).setOrigin(0.5).setDepth(201);
+
+    const restartBtn = this.add.text(GAME_WIDTH / 2, 710, '> RESTART <', {
       fontFamily: 'Outfit', fontSize: '28px', color: '#00ffff'
     }).setOrigin(0.5).setDepth(201).setInteractive({ useHandCursor: true });
 
-    restartBtn.on('pointerdown', () => {
+    let currentName = 'AAA';
+
+    const renderRanking = (entries: HighScoreEntry[]) => {
+      const rows = entries.length > 0
+        ? entries
+            .slice(0, SCORE_TOP10_LIMIT)
+            .map((entry, index) =>
+              `${String(index + 1).padStart(2, '0')}. ${entry.name.padEnd(SCORE_NAME_MAX_LENGTH, ' ')} ${String(entry.score).padStart(6, ' ')}`
+            )
+        : ['01. --------      000000'];
+
+      while (rows.length < SCORE_TOP10_LIMIT) {
+        rows.push(`${String(rows.length + 1).padStart(2, '0')}. --------      000000`);
+      }
+
+      rankingText.setText(rows.join('\n'));
+    };
+
+    const keyboard = this.input.keyboard;
+    let keyHandler: ((event: KeyboardEvent) => void) | null = null;
+
+    const cleanup = () => {
+      if (keyboard && keyHandler) {
+        keyboard.off('keydown', keyHandler);
+      }
+
       bg.destroy();
       result.destroy();
-      score.destroy();
+      finalScoreText.destroy();
+      hypeScoreText.destroy();
+      rankingTitle.destroy();
+      rankingText.destroy();
+      promptText.destroy();
+      nameEntryText.destroy();
       restartBtn.destroy();
+    };
+
+    const finalizeRestart = () => {
+      cleanup();
       this.resetGameVariables();
-    });
-    
+    };
+
+    renderRanking(highScores);
+
+    if (qualifies) {
+      promptText.setText('NEW HIGH SCORE!\nTYPE YOUR NAME AND PRESS ENTER');
+      nameEntryText.setText(currentName);
+
+      keyHandler = (event: KeyboardEvent) => {
+        if (event.key === 'Enter') {
+          const savedScores = this.buildUpdatedHighScores(currentName.trim() || 'AAA', finalScore);
+          this.saveHighScores(savedScores);
+          renderRanking(savedScores);
+          promptText.setText('SCORE SAVED');
+          nameEntryText.setText(currentName.trim() || 'AAA');
+          if (keyboard && keyHandler) {
+            keyboard.off('keydown', keyHandler);
+            keyHandler = null;
+          }
+          return;
+        }
+
+        if (event.key === 'Backspace') {
+          currentName = currentName.slice(0, -1);
+          if (currentName.length === 0) currentName = '';
+          nameEntryText.setText(currentName || '_');
+          return;
+        }
+
+        const key = event.key.toUpperCase();
+        if (/^[A-Z0-9 ]$/.test(key) && currentName.length < SCORE_NAME_MAX_LENGTH) {
+          currentName += key;
+          nameEntryText.setText(currentName);
+        }
+      };
+
+      keyboard?.on('keydown', keyHandler);
+    } else {
+      promptText.setText('NO NEW RECORD\nPRESS RESTART TO TRY AGAIN');
+    }
+
+    restartBtn.on('pointerdown', finalizeRestart);
+
     this.tweens.add({
-      targets: [result, score, restartBtn],
-      scaleX: { from: 0.5, to: 1 },
-      scaleY: { from: 0.5, to: 1 },
-      duration: 300,
+      targets: [result, finalScoreText, hypeScoreText, rankingTitle, rankingText, promptText, nameEntryText, restartBtn],
+      scaleX: { from: 0.92, to: 1 },
+      scaleY: { from: 0.92, to: 1 },
+      alpha: { from: 0, to: 1 },
+      duration: 240,
       ease: 'Back.out'
     });
   }
