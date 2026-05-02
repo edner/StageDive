@@ -1,5 +1,8 @@
 import * as Phaser from 'phaser';
 
+// Toggle this to isolate player-vs-map collisions during level debugging.
+const DEBUG_COLLISION_ONLY = false;
+
 const GAME_WIDTH = 400;
 const GAME_HEIGHT = 800;
 const LANE_HEIGHT = 50;
@@ -296,7 +299,13 @@ export default class GameScene extends Phaser.Scene {
     // Thick invisible barrier to prevent ALL crowd from invading the stage/security
     // Covers y = 0 to y = 250 (Center at 125, height 250)
     const barrierRect = this.add.rectangle(GAME_WIDTH / 2, 125, GAME_WIDTH, 250);
-    barrierRect.setVisible(false);
+    if (DEBUG_COLLISION_ONLY) {
+      barrierRect.setFillStyle(0xff3366, 0.08);
+      barrierRect.setStrokeStyle(2, 0xff3366, 0.45);
+      barrierRect.setDepth(40);
+    } else {
+      barrierRect.setVisible(false);
+    }
     this.crowdBarrier = this.physics.add.existing(barrierRect, true); 
 
     this.player = this.physics.add.sprite(GAME_WIDTH / 2, SPAWN_Y, 'player_attendee_sheet', 0);
@@ -322,10 +331,12 @@ export default class GameScene extends Phaser.Scene {
 
     this.setupSecurityLane();
     this.setupStageCasePlatforms();
-    this.spawnPersistentCrowd();
-    this.spawnSecurityChasers();
-    this.spawnRoadies();
-    this.spawnMusicians();
+    if (!DEBUG_COLLISION_ONLY) {
+      this.spawnPersistentCrowd();
+      this.spawnSecurityChasers();
+      this.spawnRoadies();
+      this.spawnMusicians();
+    }
 
     this.hypeText = this.add.text(10, 10, 'HYPE: 0', {
       fontFamily: 'Outfit', fontSize: '24px', color: '#fff', stroke: '#ff0066', strokeThickness: 4
@@ -334,6 +345,19 @@ export default class GameScene extends Phaser.Scene {
     this.livesText = this.add.text(GAME_WIDTH - 10, 10, '♥♥♥', {
       fontFamily: 'Outfit', fontSize: '24px', color: '#ff0000', stroke: '#fff', strokeThickness: 2
     }).setOrigin(1, 0).setDepth(100);
+
+    if (DEBUG_COLLISION_ONLY) {
+      this.add.text(GAME_WIDTH / 2, 18, 'DEBUG COLLISION MODE', {
+        fontFamily: 'Outfit', fontSize: '18px', color: '#00ffff', fontStyle: '900', stroke: '#000', strokeThickness: 4
+      }).setOrigin(0.5, 0).setDepth(120);
+
+      this.add.text(GAME_WIDTH / 2, 42, 'Only player + map collisions enabled', {
+        fontFamily: 'Outfit', fontSize: '12px', color: '#ffffff', stroke: '#000', strokeThickness: 3
+      }).setOrigin(0.5, 0).setDepth(120);
+
+      this.add.rectangle(GAME_WIDTH / 2, STAGE_BOTTOM_Y, GAME_WIDTH, 3, 0x00ffaa, 0.75).setDepth(40);
+      this.add.rectangle(GAME_WIDTH / 2, SECURITY_BOTTOM_Y, GAME_WIDTH, 3, 0xffaa00, 0.75).setDepth(40);
+    }
 
     // Collisions
     this.physics.add.collider(this.crowdGroup, this.crowdGroup);
@@ -388,6 +412,10 @@ export default class GameScene extends Phaser.Scene {
       rail.setCollideWorldBounds(true);
       rail.setData('startX', x);
       rail.setData('startY', securityY);
+    }
+
+    if (DEBUG_COLLISION_ONLY) {
+      return;
     }
 
     this.time.addEvent({
