@@ -174,6 +174,10 @@ export default class GameScene extends Phaser.Scene {
   private jostleForce: number = 50;
   private physicsBounce: number = 0.4;
   private aggroMultiplier: number = 4.0; // Adjust this to make aggro entities push harder (1.0 = normal, 2.0 = double)
+  private extraCrowdPending: number = 0;
+  private extraCrowdTotal: number = 0;
+  private extraCrowdTriggered: boolean = false;
+  private lastExtraCrowdSpawnTime: number = 0;
 
   // Line Crowd settings
   private lineSpawnRate: number = 1200;
@@ -1595,6 +1599,46 @@ export default class GameScene extends Phaser.Scene {
     }
   }
 
+  private queueExtraCrowdReinforcements() {
+    if (this.extraCrowdTriggered) return;
+
+    this.extraCrowdTriggered = true;
+    this.extraCrowdTotal = Math.max(1, Math.round(this.publicNumber * 0.6));
+    this.extraCrowdPending = this.extraCrowdTotal;
+    this.lastExtraCrowdSpawnTime = this.time.now;
+  }
+
+  private spawnQueuedExtraCrowd(time: number) {
+    if (this.extraCrowdPending <= 0) return;
+    if (time < this.lastExtraCrowdSpawnTime + 180) return;
+
+    this.lastExtraCrowdSpawnTime = time;
+
+    const minY = GAME_HEIGHT * 0.82;
+    const maxY = GAME_HEIGHT - LANE_HEIGHT;
+    const spawnCount = Math.min(this.extraCrowdPending, Phaser.Math.Between(1, 2));
+
+    for (let index = 0; index < spawnCount; index++) {
+      const randomY = Phaser.Math.FloatBetween(minY, maxY);
+      const randomX = Phaser.Math.Between(18, GAME_WIDTH - 18);
+      const entity = this.createCrowdMember(this.crowdGroup, randomX, randomY, false);
+      entity.setData('isReinforcement', true);
+      entity.setAlpha(0);
+      entity.setScale(0.3);
+
+      this.tweens.add({
+        targets: entity,
+        alpha: 1,
+        scaleX: NORMAL_CROWD_DISPLAY_SCALE,
+        scaleY: NORMAL_CROWD_DISPLAY_SCALE,
+        duration: 260,
+        ease: 'Sine.easeOut'
+      });
+    }
+
+    this.extraCrowdPending -= spawnCount;
+  }
+
   private resetGameVariables() {
     this.hype = 0;
     this.lives = 6;
@@ -1607,6 +1651,10 @@ export default class GameScene extends Phaser.Scene {
     this.playerFacing = 'front';
     this.playerSpecialAnimation = null;
     this.playerAggroInvulnerableUntil = 0;
+    this.extraCrowdPending = 0;
+    this.extraCrowdTotal = 0;
+    this.extraCrowdTriggered = false;
+    this.lastExtraCrowdSpawnTime = 0;
     
     this.pushForce = -30;
     this.jostleForce = 50;
@@ -1618,6 +1666,11 @@ export default class GameScene extends Phaser.Scene {
     
     this.crowdGroup.getChildren().forEach((child: any) => child.setBounce(this.physicsBounce));
     this.lineCrowdGroup.clear(true, true);
+    this.crowdGroup.getChildren().forEach((child: any) => {
+      if (child.getData('isReinforcement')) {
+        child.destroy();
+      }
+    });
     
     this.updateHype(0);
     this.player.setPosition(GAME_WIDTH / 2, SPAWN_Y);
@@ -1735,6 +1788,7 @@ export default class GameScene extends Phaser.Scene {
     }
 
     this.updateCrowdAI(time);
+    this.spawnQueuedExtraCrowd(time);
     this.updateSecurityAI();
     this.updateRoadiesAI(time);
     this.spawnLineCrowd(time);
@@ -1895,6 +1949,7 @@ export default class GameScene extends Phaser.Scene {
         this.physicsBounce = 0.5;
         this.lineSpawnRate = 800;
         this.lineBaseSpeed = 140;
+        this.queueExtraCrowdReinforcements();
         break;
       case 'drop':
         this.pushForce = -120; 
