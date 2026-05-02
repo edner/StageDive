@@ -71,6 +71,18 @@ const ROADIE_HOME_POSITIONS = [
   { x: 54, y: 115, idleSide: 'left' },
   { x: GAME_WIDTH - 42, y: 115, idleSide: 'right' }
 ] as const;
+const NORMAL_CROWD_FRAME_SIZE = 96;
+const NORMAL_CROWD_DISPLAY_SCALE = 0.56;
+const NORMAL_CROWD_VARIANTS = [
+  { animationPrefix: 'crowd-normal-1', rowStart: 0 },
+  { animationPrefix: 'crowd-normal-2', rowStart: 9 },
+  { animationPrefix: 'crowd-normal-3', rowStart: 18 },
+  { animationPrefix: 'crowd-normal-4', rowStart: 27 },
+  { animationPrefix: 'crowd-normal-5', rowStart: 36 },
+  { animationPrefix: 'crowd-normal-6', rowStart: 45 },
+  { animationPrefix: 'crowd-normal-7', rowStart: 54 },
+  { animationPrefix: 'crowd-normal-8', rowStart: 63 }
+] as const;
 const AGGRO_CROWD_FRAME_SIZE = 96;
 const AGGRO_CROWD_DISPLAY_SCALE = 0.58;
 const AGGRO_CROWD_ATTACK_COOLDOWN_MS = 700;
@@ -209,6 +221,11 @@ export default class GameScene extends Phaser.Scene {
       frameHeight: DRUMMER_FRAME_HEIGHT
     });
 
+    this.load.spritesheet('crowd_normal_sheet', 'assets/crowd-normal-sheet.png', {
+      frameWidth: NORMAL_CROWD_FRAME_SIZE,
+      frameHeight: NORMAL_CROWD_FRAME_SIZE
+    });
+
     AGGRO_CROWD_VARIANTS.forEach(({ textureKey }, index) => {
       this.load.spritesheet(textureKey, `assets/aggro-crowd-${index + 1}-sheet.png`, {
         frameWidth: AGGRO_CROWD_FRAME_SIZE,
@@ -245,6 +262,7 @@ export default class GameScene extends Phaser.Scene {
     this.createGuitaristAnimations();
     this.createBassistAnimations();
     this.createDrummerAnimations();
+    this.createNormalCrowdAnimations();
     this.createAggroCrowdAnimations();
 
     this.crowdGroup = this.physics.add.group();
@@ -477,6 +495,39 @@ export default class GameScene extends Phaser.Scene {
         frames: this.anims.generateFrameNumbers('roadie_sheet', { frames }),
         frameRate,
         repeat
+      });
+    });
+  }
+
+  private createNormalCrowdAnimations() {
+    if (this.anims.exists('crowd-normal-1-idle-front')) {
+      return;
+    }
+
+    NORMAL_CROWD_VARIANTS.forEach(({ animationPrefix, rowStart }) => {
+      const animations: Array<{
+        key: string;
+        frames: number[];
+        frameRate: number;
+        repeat: number;
+      }> = [
+        { key: `${animationPrefix}-idle-front`, frames: [rowStart + 0], frameRate: 1, repeat: -1 },
+        { key: `${animationPrefix}-idle-left`, frames: [rowStart + 2], frameRate: 1, repeat: -1 },
+        { key: `${animationPrefix}-idle-right`, frames: [rowStart + 2], frameRate: 1, repeat: -1 },
+        { key: `${animationPrefix}-idle-back`, frames: [rowStart + 8], frameRate: 1, repeat: -1 },
+        { key: `${animationPrefix}-walk-front`, frames: [rowStart + 0, rowStart + 5], frameRate: 5, repeat: -1 },
+        { key: `${animationPrefix}-walk-left`, frames: [rowStart + 1, rowStart + 2, rowStart + 3, rowStart + 4], frameRate: 7, repeat: -1 },
+        { key: `${animationPrefix}-walk-right`, frames: [rowStart + 1, rowStart + 2, rowStart + 3, rowStart + 4], frameRate: 7, repeat: -1 },
+        { key: `${animationPrefix}-walk-back`, frames: [rowStart + 6, rowStart + 7, rowStart + 8, rowStart + 7], frameRate: 6, repeat: -1 }
+      ];
+
+      animations.forEach(({ key, frames, frameRate, repeat }) => {
+        this.anims.create({
+          key,
+          frames: this.anims.generateFrameNumbers('crowd_normal_sheet', { frames }),
+          frameRate,
+          repeat
+        });
       });
     });
   }
@@ -729,8 +780,31 @@ export default class GameScene extends Phaser.Scene {
     const body = entity.body as Phaser.Physics.Arcade.Body | null;
     if (!body) return;
 
-    body.setSize(34, 28);
-    body.setOffset(31, 61);
+    const radius = 26;
+    const diameter = radius * 2;
+    const offsetX = Math.round((AGGRO_CROWD_FRAME_SIZE - diameter) / 2);
+    const offsetY = AGGRO_CROWD_FRAME_SIZE - diameter - 10;
+
+    body.setCircle(radius, offsetX, offsetY);
+  }
+
+  private configureNormalCrowdBody(entity: Phaser.Physics.Arcade.Sprite) {
+    const body = entity.body as Phaser.Physics.Arcade.Body | null;
+    if (!body) return;
+
+    const radius = 28;
+    const diameter = radius * 2;
+    const offsetX = Math.round((NORMAL_CROWD_FRAME_SIZE - diameter) / 2);
+    const offsetY = NORMAL_CROWD_FRAME_SIZE - diameter - 10;
+
+    body.setCircle(radius, offsetX, offsetY);
+  }
+
+  private updateCrowdDepth(entity: Phaser.Physics.Arcade.Sprite) {
+    const body = entity.body as Phaser.Physics.Arcade.Body | null;
+    const sortY = body?.bottom ?? entity.y;
+    const normalizedDepth = Phaser.Math.Clamp((sortY / GAME_HEIGHT) * (PLAYER_BASE_DEPTH - 2), 1, PLAYER_BASE_DEPTH - 1);
+    entity.setDepth(normalizedDepth);
   }
 
   private getCrowdFacingFromVelocity(
@@ -754,16 +828,20 @@ export default class GameScene extends Phaser.Scene {
     action: 'idle' | 'walk' | 'attack',
     facing?: CrowdFacing
   ) {
-    const animationPrefix = entity.getData('aggroAnimPrefix') as string | undefined;
+    const animationPrefix = entity.getData('crowdAnimPrefix') as string | undefined;
     if (!animationPrefix) return;
 
     const animationKey =
       action === 'attack'
         ? `${animationPrefix}-attack`
         : `${animationPrefix}-${action}-${facing ?? 'front'}`;
+    const shouldMirrorRight =
+      facing === 'right' && Boolean(entity.getData('mirrorCrowdRight'));
+    const currentFlipX = entity.flipX;
 
-    if (entity.anims.currentAnim?.key !== animationKey) {
+    if (entity.anims.currentAnim?.key !== animationKey || currentFlipX !== shouldMirrorRight) {
       entity.play(animationKey, true);
+      entity.setFlipX(shouldMirrorRight);
     }
   }
 
@@ -771,7 +849,7 @@ export default class GameScene extends Phaser.Scene {
     entity: Phaser.Physics.Arcade.Sprite,
     preferredFacing?: CrowdFacing
   ) {
-    if (!entity.active || !entity.getData('isAggressive')) return;
+    if (!entity.active || !entity.getData('crowdAnimPrefix')) return;
 
     const attackUntil = (entity.getData('attackUntil') as number | undefined) ?? 0;
     if (this.time.now < attackUntil) {
@@ -1463,11 +1541,15 @@ export default class GameScene extends Phaser.Scene {
     isAggressive: boolean,
     lineMover: boolean = false
   ) {
+    const normalVariants = [...NORMAL_CROWD_VARIANTS];
     const aggroVariants = [...AGGRO_CROWD_VARIANTS];
-    const variant = isAggressive
+    const normalVariant = !isAggressive
+      ? (Phaser.Utils.Array.GetRandom(normalVariants) as (typeof NORMAL_CROWD_VARIANTS)[number])
+      : null;
+    const aggroVariant = isAggressive
       ? (Phaser.Utils.Array.GetRandom(aggroVariants) as (typeof AGGRO_CROWD_VARIANTS)[number])
       : null;
-    const textureKey = variant ? variant.textureKey : 'crowd';
+    const textureKey = aggroVariant ? aggroVariant.textureKey : 'crowd_normal_sheet';
     const entity = group.create(x, y, textureKey) as Phaser.Physics.Arcade.Sprite;
 
     entity.setCollideWorldBounds(!lineMover);
@@ -1478,17 +1560,23 @@ export default class GameScene extends Phaser.Scene {
     entity.setData('pushedUntil', 0);
     entity.setData('nextAttackAt', 0);
     entity.setData('attackUntil', 0);
+    entity.setData('crowdFacing', 'front');
+    entity.setData('mirrorCrowdRight', !isAggressive);
 
-    if (!isAggressive || !variant) {
-      entity.body?.setCircle(20);
+    if (!isAggressive && normalVariant) {
+      entity.setScale(NORMAL_CROWD_DISPLAY_SCALE);
+      entity.setData('crowdAnimPrefix', normalVariant.animationPrefix);
+      this.configureNormalCrowdBody(entity);
+      this.playAggroCrowdAnimation(entity, 'idle', 'front');
+      this.updateCrowdDepth(entity);
       return entity;
     }
 
     entity.setScale(AGGRO_CROWD_DISPLAY_SCALE);
-    entity.setData('aggroAnimPrefix', variant.animationPrefix);
-    entity.setData('crowdFacing', 'front');
+    entity.setData('crowdAnimPrefix', aggroVariant?.animationPrefix);
     this.configureAggroCrowdBody(entity);
     this.playAggroCrowdAnimation(entity, 'idle', 'front');
+    this.updateCrowdDepth(entity);
     return entity;
   }
 
@@ -1551,10 +1639,11 @@ export default class GameScene extends Phaser.Scene {
       child.setData('pushedUntil', 0);
       child.setData('nextAttackAt', 0);
       child.setData('attackUntil', 0);
-      if (child.getData('isAggressive')) {
+      if (child.getData('crowdAnimPrefix')) {
         child.setData('crowdFacing', 'front');
         this.playAggroCrowdAnimation(child as Phaser.Physics.Arcade.Sprite, 'idle', 'front');
       }
+      this.updateCrowdDepth(child as Phaser.Physics.Arcade.Sprite);
     });
 
     this.securityBarrierGroup.getChildren().forEach((child: any) => {
@@ -2306,9 +2395,11 @@ export default class GameScene extends Phaser.Scene {
         }
       }
 
-      if (entity.getData('isAggressive')) {
+      if (entity.getData('crowdAnimPrefix')) {
         this.updateAggroCrowdAnimation(entity);
       }
+
+      this.updateCrowdDepth(entity);
     });
   }
 
@@ -2331,7 +2422,7 @@ export default class GameScene extends Phaser.Scene {
 
         const speedOffset = Phaser.Math.Between(-20, 40);
         entity.setVelocityX(direction * (this.lineBaseSpeed + speedOffset));
-        if (isAggressive) {
+        if (entity.getData('crowdAnimPrefix')) {
           this.updateAggroCrowdAnimation(entity, direction === 1 ? 'right' : 'left');
         }
       }
@@ -2355,10 +2446,12 @@ export default class GameScene extends Phaser.Scene {
         }
       }
 
-      if (entity.getData('isAggressive')) {
+      if (entity.getData('crowdAnimPrefix')) {
         const direction = entity.getData('direction');
         this.updateAggroCrowdAnimation(entity, direction === 1 ? 'right' : 'left');
       }
+
+      this.updateCrowdDepth(entity);
     });
   }
 
