@@ -89,6 +89,7 @@ const AGGRO_CROWD_ATTACK_COOLDOWN_MS = 700;
 const AGGRO_CROWD_ATTACK_RECOVERY_MS = 260;
 const AGGRO_CROWD_PIT_SHOVE_FORCE = 110;
 const AGGRO_CROWD_LINE_SHOVE_FORCE = 145;
+const AGGRO_HITS_PER_HALF_LIFE = 5;
 const AGGRO_CROWD_VARIANTS = [
   { textureKey: 'aggro_crowd_1_sheet', animationPrefix: 'aggro-crowd-1' },
   { textureKey: 'aggro_crowd_2_sheet', animationPrefix: 'aggro-crowd-2' },
@@ -154,6 +155,7 @@ export default class GameScene extends Phaser.Scene {
   private playerFacing: PlayerFacing = 'front';
   private playerSpecialAnimation: PlayerSpecialAnimation | null = null;
   private playerAggroInvulnerableUntil: number = 0;
+  private aggroHitCount: number = 0;
   
   // Music logic
   private musicTime: number = 0;
@@ -1651,6 +1653,7 @@ export default class GameScene extends Phaser.Scene {
     this.playerFacing = 'front';
     this.playerSpecialAnimation = null;
     this.playerAggroInvulnerableUntil = 0;
+    this.aggroHitCount = 0;
     this.extraCrowdPending = 0;
     this.extraCrowdTotal = 0;
     this.extraCrowdTriggered = false;
@@ -2568,8 +2571,13 @@ export default class GameScene extends Phaser.Scene {
     player.setVelocityX((player.body?.velocity.x || 0) + Math.cos(angle) * shoveForce);
     player.setVelocityY((player.body?.velocity.y || 0) + Math.sin(angle) * shoveForce);
 
-    this.lives = Math.max(0, this.lives - 1);
-    this.updateLivesDisplay();
+    this.aggroHitCount += 1;
+    const shouldLoseHalfLife = this.aggroHitCount % AGGRO_HITS_PER_HALF_LIFE === 0;
+    if (shouldLoseHalfLife) {
+      this.lives = Math.max(0, this.lives - 1);
+      this.updateLivesDisplay();
+    }
+
     this.updateHype(Math.max(0, this.hype - 8));
     this.cameras.main.shake(110, 0.006);
     this.cameras.main.flash(90, 255, 96, 0);
@@ -2580,11 +2588,11 @@ export default class GameScene extends Phaser.Scene {
       }
     });
 
-    if (this.lives <= 0) {
+    if (shouldLoseHalfLife && this.lives <= 0) {
       this.isDiving = true;
       this.player.setVelocity(0, 0);
       this.setPlayerSpecialAnimation('beated');
-      this.showGameOver('MAULED BY CROWD!', '#ff6600');
+      this.showGameOver('MAULED\nBY CROWD!', '#ff6600');
     }
   }
 
