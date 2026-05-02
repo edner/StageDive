@@ -71,6 +71,18 @@ const ROADIE_HOME_POSITIONS = [
   { x: 54, y: 115, idleSide: 'left' },
   { x: GAME_WIDTH - 42, y: 115, idleSide: 'right' }
 ] as const;
+const AGGRO_CROWD_FRAME_SIZE = 96;
+const AGGRO_CROWD_DISPLAY_SCALE = 0.58;
+const AGGRO_CROWD_ATTACK_COOLDOWN_MS = 700;
+const AGGRO_CROWD_ATTACK_RECOVERY_MS = 260;
+const AGGRO_CROWD_PIT_SHOVE_FORCE = 110;
+const AGGRO_CROWD_LINE_SHOVE_FORCE = 145;
+const AGGRO_CROWD_VARIANTS = [
+  { textureKey: 'aggro_crowd_1_sheet', animationPrefix: 'aggro-crowd-1' },
+  { textureKey: 'aggro_crowd_2_sheet', animationPrefix: 'aggro-crowd-2' },
+  { textureKey: 'aggro_crowd_3_sheet', animationPrefix: 'aggro-crowd-3' },
+  { textureKey: 'aggro_crowd_4_sheet', animationPrefix: 'aggro-crowd-4' }
+] as const;
 
 // New Boundaries
 const STAGE_BOTTOM_Y = 150;
@@ -89,6 +101,7 @@ type VocalistFacing = 'front' | 'back' | 'left' | 'right';
 type GuitaristFacing = 'front' | 'back' | 'left' | 'right';
 type BassistFacing = 'front' | 'back' | 'left' | 'right';
 type RoadieFacing = 'front' | 'back' | 'left' | 'right';
+type CrowdFacing = 'front' | 'back' | 'left' | 'right';
 type RoadieIdleSide = 'left' | 'right';
 type RoadiePushDirection = 'left' | 'right' | 'forward';
 type PlayerFacing = 'front' | 'back' | 'left' | 'right';
@@ -128,6 +141,7 @@ export default class GameScene extends Phaser.Scene {
   private stageEntryTime: number = 0;
   private playerFacing: PlayerFacing = 'front';
   private playerSpecialAnimation: PlayerSpecialAnimation | null = null;
+  private playerAggroInvulnerableUntil: number = 0;
   
   // Music logic
   private musicTime: number = 0;
@@ -195,6 +209,13 @@ export default class GameScene extends Phaser.Scene {
       frameHeight: DRUMMER_FRAME_HEIGHT
     });
 
+    AGGRO_CROWD_VARIANTS.forEach(({ textureKey }, index) => {
+      this.load.spritesheet(textureKey, `assets/aggro-crowd-${index + 1}-sheet.png`, {
+        frameWidth: AGGRO_CROWD_FRAME_SIZE,
+        frameHeight: AGGRO_CROWD_FRAME_SIZE
+      });
+    });
+
     const graphics = this.add.graphics();
 
     // Normal Crowd: pink circle with a dark center
@@ -203,19 +224,6 @@ export default class GameScene extends Phaser.Scene {
     graphics.fillStyle(0x880033, 1);
     graphics.fillCircle(20, 20, 10);
     graphics.generateTexture('crowd', 40, 40);
-    graphics.clear();
-
-    // Aggro Crowd: red circle with yellow spikes
-    graphics.fillStyle(0xff3300, 1);
-    graphics.fillCircle(22, 22, 22);
-    graphics.lineStyle(3, 0xffff00, 1);
-    for(let i=0; i<8; i++) {
-        const angle = (i * Math.PI) / 4;
-        graphics.moveTo(22 + Math.cos(angle)*18, 22 + Math.sin(angle)*18);
-        graphics.lineTo(22 + Math.cos(angle)*26, 22 + Math.sin(angle)*26);
-    }
-    graphics.strokePath();
-    graphics.generateTexture('crowd_aggro', 44, 44);
     graphics.clear();
 
     this.load.image('rail', 'assets/rail.png');
@@ -237,6 +245,7 @@ export default class GameScene extends Phaser.Scene {
     this.createGuitaristAnimations();
     this.createBassistAnimations();
     this.createDrummerAnimations();
+    this.createAggroCrowdAnimations();
 
     this.crowdGroup = this.physics.add.group();
     this.securityBarrierGroup = this.physics.add.group({ immovable: true });
@@ -472,6 +481,40 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
+  private createAggroCrowdAnimations() {
+    if (this.anims.exists('aggro-crowd-1-idle-front')) {
+      return;
+    }
+
+    AGGRO_CROWD_VARIANTS.forEach(({ textureKey, animationPrefix }) => {
+      const animations: Array<{
+        key: string;
+        frames: number[];
+        frameRate: number;
+        repeat: number;
+      }> = [
+        { key: `${animationPrefix}-idle-front`, frames: [0], frameRate: 1, repeat: -1 },
+        { key: `${animationPrefix}-idle-right`, frames: [3], frameRate: 1, repeat: -1 },
+        { key: `${animationPrefix}-idle-left`, frames: [4], frameRate: 1, repeat: -1 },
+        { key: `${animationPrefix}-idle-back`, frames: [5], frameRate: 1, repeat: -1 },
+        { key: `${animationPrefix}-walk-front`, frames: [0, 7], frameRate: 5, repeat: -1 },
+        { key: `${animationPrefix}-walk-right`, frames: [2, 3], frameRate: 5, repeat: -1 },
+        { key: `${animationPrefix}-walk-left`, frames: [1, 4], frameRate: 5, repeat: -1 },
+        { key: `${animationPrefix}-walk-back`, frames: [5, 6], frameRate: 5, repeat: -1 },
+        { key: `${animationPrefix}-attack`, frames: [8, 9], frameRate: 8, repeat: 0 }
+      ];
+
+      animations.forEach(({ key, frames, frameRate, repeat }) => {
+        this.anims.create({
+          key,
+          frames: this.anims.generateFrameNumbers(textureKey, { frames }),
+          frameRate,
+          repeat
+        });
+      });
+    });
+  }
+
   private createVocalistAnimations() {
     if (this.anims.exists('vocalist-idle-front')) {
       return;
@@ -680,6 +723,70 @@ export default class GameScene extends Phaser.Scene {
     if (this.drummer.anims.currentAnim?.key !== animationKey) {
       this.drummer.play(animationKey, true);
     }
+  }
+
+  private configureAggroCrowdBody(entity: Phaser.Physics.Arcade.Sprite) {
+    const body = entity.body as Phaser.Physics.Arcade.Body | null;
+    if (!body) return;
+
+    body.setSize(34, 28);
+    body.setOffset(31, 61);
+  }
+
+  private getCrowdFacingFromVelocity(
+    velocityX: number,
+    velocityY: number,
+    fallback: CrowdFacing = 'front'
+  ): CrowdFacing {
+    if (Math.abs(velocityX) < 8 && Math.abs(velocityY) < 8) {
+      return fallback;
+    }
+
+    if (Math.abs(velocityX) > Math.abs(velocityY)) {
+      return velocityX >= 0 ? 'right' : 'left';
+    }
+
+    return velocityY >= 0 ? 'front' : 'back';
+  }
+
+  private playAggroCrowdAnimation(
+    entity: Phaser.Physics.Arcade.Sprite,
+    action: 'idle' | 'walk' | 'attack',
+    facing?: CrowdFacing
+  ) {
+    const animationPrefix = entity.getData('aggroAnimPrefix') as string | undefined;
+    if (!animationPrefix) return;
+
+    const animationKey =
+      action === 'attack'
+        ? `${animationPrefix}-attack`
+        : `${animationPrefix}-${action}-${facing ?? 'front'}`;
+
+    if (entity.anims.currentAnim?.key !== animationKey) {
+      entity.play(animationKey, true);
+    }
+  }
+
+  private updateAggroCrowdAnimation(
+    entity: Phaser.Physics.Arcade.Sprite,
+    preferredFacing?: CrowdFacing
+  ) {
+    if (!entity.active || !entity.getData('isAggressive')) return;
+
+    const attackUntil = (entity.getData('attackUntil') as number | undefined) ?? 0;
+    if (this.time.now < attackUntil) {
+      return;
+    }
+
+    const body = entity.body as Phaser.Physics.Arcade.Body | null;
+    const previousFacing = (entity.getData('crowdFacing') as CrowdFacing | undefined) ?? 'front';
+    const facing =
+      preferredFacing ??
+      this.getCrowdFacingFromVelocity(body?.velocity.x ?? 0, body?.velocity.y ?? 0, previousFacing);
+    const isMoving = body ? body.speed > 20 : false;
+
+    entity.setData('crowdFacing', facing);
+    this.playAggroCrowdAnimation(entity, isMoving ? 'walk' : 'idle', facing);
   }
 
   private getRandomDrummerAnimation() {
@@ -1349,6 +1456,42 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
+  private createCrowdMember(
+    group: Phaser.Physics.Arcade.Group,
+    x: number,
+    y: number,
+    isAggressive: boolean,
+    lineMover: boolean = false
+  ) {
+    const aggroVariants = [...AGGRO_CROWD_VARIANTS];
+    const variant = isAggressive
+      ? (Phaser.Utils.Array.GetRandom(aggroVariants) as (typeof AGGRO_CROWD_VARIANTS)[number])
+      : null;
+    const textureKey = variant ? variant.textureKey : 'crowd';
+    const entity = group.create(x, y, textureKey) as Phaser.Physics.Arcade.Sprite;
+
+    entity.setCollideWorldBounds(!lineMover);
+    entity.setBounce(this.physicsBounce);
+    entity.setDrag(lineMover ? 0 : 50);
+    entity.setData('isAggressive', isAggressive);
+    entity.setData('jiggleOffsetX', Phaser.Math.Between(0, 1000));
+    entity.setData('pushedUntil', 0);
+    entity.setData('nextAttackAt', 0);
+    entity.setData('attackUntil', 0);
+
+    if (!isAggressive || !variant) {
+      entity.body?.setCircle(20);
+      return entity;
+    }
+
+    entity.setScale(AGGRO_CROWD_DISPLAY_SCALE);
+    entity.setData('aggroAnimPrefix', variant.animationPrefix);
+    entity.setData('crowdFacing', 'front');
+    this.configureAggroCrowdBody(entity);
+    this.playAggroCrowdAnimation(entity, 'idle', 'front');
+    return entity;
+  }
+
   private spawnPersistentCrowd() {
     // Starts below the new security barrier (250)
     const minY = SECURITY_BOTTOM_Y + 30; 
@@ -1360,19 +1503,7 @@ export default class GameScene extends Phaser.Scene {
       const randomX = Phaser.Math.Between(10, GAME_WIDTH - 10);
       
       const isAggressive = Math.random() < this.aggressiveChance;
-      const texture = isAggressive ? 'crowd_aggro' : 'crowd';
-      
-      const entity = this.crowdGroup.create(randomX, randomY, texture) as Phaser.Physics.Arcade.Sprite;
-      
-      entity.setCollideWorldBounds(true);
-      entity.setBounce(this.physicsBounce);
-      entity.setDrag(50);
-      
-      if (isAggressive) entity.body?.setCircle(22);
-      else entity.body?.setCircle(20);
-      
-      entity.setData('isAggressive', isAggressive);
-      entity.setData('jiggleOffsetX', Phaser.Math.Between(0, 1000));
+      this.createCrowdMember(this.crowdGroup, randomX, randomY, isAggressive);
     }
   }
 
@@ -1387,6 +1518,7 @@ export default class GameScene extends Phaser.Scene {
     this.stageEntryTime = 0;
     this.playerFacing = 'front';
     this.playerSpecialAnimation = null;
+    this.playerAggroInvulnerableUntil = 0;
     
     this.pushForce = -30;
     this.jostleForce = 50;
@@ -1415,6 +1547,14 @@ export default class GameScene extends Phaser.Scene {
       child.y = minY + bias * (maxY - minY);
       child.x = Phaser.Math.Between(10, GAME_WIDTH - 10);
       child.setVelocity(0, 0);
+      child.setAcceleration(0, 0);
+      child.setData('pushedUntil', 0);
+      child.setData('nextAttackAt', 0);
+      child.setData('attackUntil', 0);
+      if (child.getData('isAggressive')) {
+        child.setData('crowdFacing', 'front');
+        this.playAggroCrowdAnimation(child as Phaser.Physics.Arcade.Sprite, 'idle', 'front');
+      }
     });
 
     this.securityBarrierGroup.getChildren().forEach((child: any) => {
@@ -2143,18 +2283,20 @@ export default class GameScene extends Phaser.Scene {
       
       // Skip if recently pushed by the player
       const pushedUntil = entity.getData('pushedUntil') || 0;
-      if (this.time.now < pushedUntil) return;
-      
-      const isAggressive = entity.getData('isAggressive');
-      const offset = entity.getData('jiggleOffsetX');
-      
-      const pushMultiplier = isAggressive ? this.aggroMultiplier : 1.0;
-      let targetVelocityY = this.pushForce * pushMultiplier;
-      const jostleTime = (time + offset) * 0.005;
-      const targetVelocityX = Math.sin(jostleTime) * this.jostleForce * pushMultiplier;
-      
-      entity.setAcceleration(targetVelocityX, targetVelocityY);
-      entity.setMaxVelocity(this.jostleForce * 1.5, Math.abs(this.pushForce) * 2);
+      if (this.time.now >= pushedUntil) {
+        const isAggressive = entity.getData('isAggressive');
+        const offset = entity.getData('jiggleOffsetX');
+        
+        const pushMultiplier = isAggressive ? this.aggroMultiplier : 1.0;
+        const targetVelocityY = this.pushForce * pushMultiplier;
+        const jostleTime = (time + offset) * 0.005;
+        const targetVelocityX = Math.sin(jostleTime) * this.jostleForce * pushMultiplier;
+        
+        entity.setAcceleration(targetVelocityX, targetVelocityY);
+        entity.setMaxVelocity(this.jostleForce * 1.5, Math.abs(this.pushForce) * 2);
+      } else {
+        entity.setAcceleration(0, 0);
+      }
       
       const minSafeY = SECURITY_BOTTOM_Y + 25; // 250 + radius buffer
       if (entity.y < minSafeY) {
@@ -2162,6 +2304,10 @@ export default class GameScene extends Phaser.Scene {
         if (entity.body && entity.body.velocity.y < 0) {
             entity.setVelocityY(0);
         }
+      }
+
+      if (entity.getData('isAggressive')) {
+        this.updateAggroCrowdAnimation(entity);
       }
     });
   }
@@ -2180,17 +2326,14 @@ export default class GameScene extends Phaser.Scene {
         const startX = direction === 1 ? -50 : GAME_WIDTH + 50;
         
         const isAggressive = Math.random() < this.aggressiveChance;
-        const texture = isAggressive ? 'crowd_aggro' : 'crowd';
-        
-        const entity = this.lineCrowdGroup.create(startX, laneY, texture) as Phaser.Physics.Arcade.Sprite;
+        const entity = this.createCrowdMember(this.lineCrowdGroup, startX, laneY, isAggressive, true);
         entity.setData('direction', direction);
-        entity.setData('isAggressive', isAggressive);
-        
-        if (isAggressive) entity.body?.setCircle(22);
-        else entity.body?.setCircle(20);
 
         const speedOffset = Phaser.Math.Between(-20, 40);
         entity.setVelocityX(direction * (this.lineBaseSpeed + speedOffset));
+        if (isAggressive) {
+          this.updateAggroCrowdAnimation(entity, direction === 1 ? 'right' : 'left');
+        }
       }
     }
   }
@@ -2210,6 +2353,11 @@ export default class GameScene extends Phaser.Scene {
         if (entity.body && entity.body.velocity.y < 0) {
             entity.setVelocityY(0);
         }
+      }
+
+      if (entity.getData('isAggressive')) {
+        const direction = entity.getData('direction');
+        this.updateAggroCrowdAnimation(entity, direction === 1 ? 'right' : 'left');
       }
     });
   }
@@ -2243,17 +2391,62 @@ export default class GameScene extends Phaser.Scene {
     }
   }
 
+  private handleAggroAttack(
+    player: Phaser.Physics.Arcade.Sprite,
+    crowdEntity: Phaser.Physics.Arcade.Sprite,
+    shoveForce: number
+  ) {
+    if (this.isDiving || this.isPerforming) return;
+
+    const now = this.time.now;
+    const nextAttackAt = (crowdEntity.getData('nextAttackAt') as number | undefined) ?? 0;
+    if (now < nextAttackAt || now < this.playerAggroInvulnerableUntil) {
+      return;
+    }
+
+    const facing = this.getCrowdFacingFromVelocity(
+      player.x - crowdEntity.x,
+      player.y - crowdEntity.y,
+      (crowdEntity.getData('crowdFacing') as CrowdFacing | undefined) ?? 'front'
+    );
+
+    crowdEntity.setData('crowdFacing', facing);
+    crowdEntity.setData('nextAttackAt', now + AGGRO_CROWD_ATTACK_COOLDOWN_MS);
+    crowdEntity.setData('attackUntil', now + AGGRO_CROWD_ATTACK_RECOVERY_MS);
+    this.playerAggroInvulnerableUntil = now + AGGRO_CROWD_ATTACK_COOLDOWN_MS;
+    this.playAggroCrowdAnimation(crowdEntity, 'attack');
+
+    const angle = Phaser.Math.Angle.Between(crowdEntity.x, crowdEntity.y, player.x, player.y);
+    player.setVelocityX((player.body?.velocity.x || 0) + Math.cos(angle) * shoveForce);
+    player.setVelocityY((player.body?.velocity.y || 0) + Math.sin(angle) * shoveForce);
+
+    this.lives = Math.max(0, this.lives - 1);
+    this.updateLivesDisplay();
+    this.updateHype(Math.max(0, this.hype - 8));
+    this.cameras.main.shake(110, 0.006);
+    this.cameras.main.flash(90, 255, 96, 0);
+
+    this.time.delayedCall(AGGRO_CROWD_ATTACK_RECOVERY_MS, () => {
+      if (crowdEntity.active) {
+        this.updateAggroCrowdAnimation(crowdEntity);
+      }
+    });
+
+    if (this.lives <= 0) {
+      this.isDiving = true;
+      this.player.setVelocity(0, 0);
+      this.setPlayerSpecialAnimation('beated');
+      this.showGameOver('MAULED BY CROWD!', '#ff6600');
+    }
+  }
+
   private handlePitCollision(player: any, crowdEntity: any) {
     const p = player as Phaser.Physics.Arcade.Sprite;
     const c = crowdEntity as Phaser.Physics.Arcade.Sprite;
     const isAggro = c.getData('isAggressive');
     
-    if (isAggro && Math.random() < 0.1) {
-      const angle = Phaser.Math.Angle.Between(c.x, c.y, p.x, p.y);
-      const shoveForce = 100 * this.aggroMultiplier;
-      p.setVelocityX((p.body?.velocity.x || 0) + Math.cos(angle) * shoveForce);
-      p.setVelocityY((p.body?.velocity.y || 0) + Math.sin(angle) * shoveForce);
-      this.cameras.main.shake(100, 0.005);
+    if (isAggro) {
+      this.handleAggroAttack(p, c, AGGRO_CROWD_PIT_SHOVE_FORCE * this.aggroMultiplier);
     }
     
     if (Math.random() < 0.05) this.updateHype(this.hype + 0.5);
@@ -2264,12 +2457,8 @@ export default class GameScene extends Phaser.Scene {
     const c = crowdEntity as Phaser.Physics.Arcade.Sprite;
     const isAggro = c.getData('isAggressive');
     
-    if (isAggro && Math.random() < 0.2) {
-      const angle = Phaser.Math.Angle.Between(c.x, c.y, p.x, p.y);
-      const shoveForce = 150 * this.aggroMultiplier;
-      p.setVelocityX((p.body?.velocity.x || 0) + Math.cos(angle) * shoveForce);
-      p.setVelocityY((p.body?.velocity.y || 0) + Math.sin(angle) * shoveForce);
-      this.cameras.main.shake(100, 0.005);
+    if (isAggro) {
+      this.handleAggroAttack(p, c, AGGRO_CROWD_LINE_SHOVE_FORCE * this.aggroMultiplier);
     }
     
     if (Math.random() < 0.05) this.updateHype(this.hype + 0.5);
@@ -2354,6 +2543,7 @@ export default class GameScene extends Phaser.Scene {
 
   private respawnPlayer() {
     this.isDiving = false;
+    this.playerAggroInvulnerableUntil = 0;
     this.player.setPosition(GAME_WIDTH / 2, SPAWN_Y);
     this.player.setVelocity(0, 0);
     this.player.setAlpha(1);
