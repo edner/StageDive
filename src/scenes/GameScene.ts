@@ -98,6 +98,17 @@ const AGGRO_CROWD_ATTACK_RECOVERY_MS = 260;
 const AGGRO_CROWD_PIT_SHOVE_FORCE = 110;
 const AGGRO_CROWD_LINE_SHOVE_FORCE = 145;
 const AGGRO_HITS_PER_HALF_LIFE = 5;
+const RAGE_MAX = 100;
+const RAGE_GAIN_PER_AGGRO_HIT = 20;
+const RAGE_DRAIN_PER_SECOND = 18;
+const RAGE_SUSTAIN_GAIN_AGGRO = 4;
+const RAGE_SUSTAIN_GAIN_SECURITY = 8;
+const RAGE_SUSTAIN_GAIN_ROADIE = 10;
+const RAGE_ABSORB_COOLDOWN_MS = 260;
+const RAGE_PUSH_RADIUS_MIN = 28;
+const RAGE_PUSH_RADIUS_MAX = 56;
+const RAGE_PUSH_DISTANCE_MIN = 8;
+const RAGE_PUSH_DISTANCE_MAX = 32;
 const AGGRO_CROWD_VARIANTS = [
   { textureKey: 'aggro_crowd_1_sheet', animationPrefix: 'aggro-crowd-1' },
   { textureKey: 'aggro_crowd_2_sheet', animationPrefix: 'aggro-crowd-2' },
@@ -164,12 +175,17 @@ export default class GameScene extends Phaser.Scene {
   private hypeText!: Phaser.GameObjects.Text;
   private lives: number = 6;
   private livesText!: Phaser.GameObjects.Text;
+  private rage: number = 0;
+  private rageActive: boolean = false;
+  private rageText!: Phaser.GameObjects.Text;
+  private rageBar!: Phaser.GameObjects.Graphics;
   private isDiving: boolean = false;
   private isPerforming: boolean = false;
   private stageEntryTime: number = 0;
   private playerFacing: PlayerFacing = 'front';
   private playerSpecialAnimation: PlayerSpecialAnimation | null = null;
   private playerAggroInvulnerableUntil: number = 0;
+  private playerRageAbsorbUntil: number = 0;
   private aggroHitCount: number = 0;
   private playerStageLevel: 'crowd' | 'stage' | 'case' = 'crowd';
   private playerStageTransitionUntil: number = 0;
@@ -338,13 +354,20 @@ export default class GameScene extends Phaser.Scene {
       this.spawnMusicians();
     }
 
-    this.hypeText = this.add.text(10, 10, 'HYPE: 0', {
+    this.hypeText = this.add.text(10, GAME_HEIGHT - 66, 'HYPE: 0', {
       fontFamily: 'Outfit', fontSize: '24px', color: '#fff', stroke: '#ff0066', strokeThickness: 4
     }).setDepth(100);
 
-    this.livesText = this.add.text(GAME_WIDTH - 10, 10, '♥♥♥', {
+    this.livesText = this.add.text(GAME_WIDTH - 10, GAME_HEIGHT - 66, '♥♥♥', {
       fontFamily: 'Outfit', fontSize: '24px', color: '#ff0000', stroke: '#fff', strokeThickness: 2
     }).setOrigin(1, 0).setDepth(100);
+
+    this.rageText = this.add.text(10, GAME_HEIGHT - 36, 'RAGE', {
+      fontFamily: 'Outfit', fontSize: '18px', color: '#ff9966', stroke: '#000', strokeThickness: 3
+    }).setDepth(100);
+
+    this.rageBar = this.add.graphics().setDepth(100);
+    this.updateRageUI();
 
     if (DEBUG_COLLISION_ONLY) {
       this.add.text(GAME_WIDTH / 2, 18, 'DEBUG COLLISION MODE', {
@@ -1819,6 +1842,9 @@ export default class GameScene extends Phaser.Scene {
     this.hype = 0;
     this.lives = 6;
     if (this.livesText) this.updateLivesDisplay();
+    this.rage = 0;
+    this.rageActive = false;
+    this.updateRageUI();
     this.musicTime = 0;
     this.currentEventIndex = 0;
     this.isDiving = false;
@@ -1827,6 +1853,7 @@ export default class GameScene extends Phaser.Scene {
     this.playerFacing = 'front';
     this.playerSpecialAnimation = null;
     this.playerAggroInvulnerableUntil = 0;
+    this.playerRageAbsorbUntil = 0;
     this.aggroHitCount = 0;
     this.playerStageLevel = 'crowd';
     this.playerStageTransitionUntil = 0;
@@ -1923,8 +1950,11 @@ export default class GameScene extends Phaser.Scene {
   update(time: number, delta: number) {
     if (this.isDiving) return;
 
-    this.musicTime += delta / 1000;
-    this.processBeatEvents();
+    if (!DEBUG_COLLISION_ONLY) {
+      this.musicTime += delta / 1000;
+      this.processBeatEvents();
+      this.updateRage(delta);
+    }
 
     if (!this.isPerforming) {
       this.handlePlayerMovement();
@@ -1932,6 +1962,10 @@ export default class GameScene extends Phaser.Scene {
 
     this.updatePlayerStageTransition();
     this.updatePlayerAnimation();
+
+    if (DEBUG_COLLISION_ONLY) {
+      return;
+    }
     this.updateVocalistAI(time);
     this.updateGuitaristAI(time);
     this.updateBassistAI(time);
@@ -1994,8 +2028,13 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private performCrowdPush() {
-    const pushRadius = 40;
-    const pushDistance = 20;
+    if (!this.rageActive || this.rage <= 0) {
+      return;
+    }
+
+    const rageRatio = Phaser.Math.Clamp(this.rage / RAGE_MAX, 0, 1);
+    const pushRadius = Phaser.Math.Linear(RAGE_PUSH_RADIUS_MIN, RAGE_PUSH_RADIUS_MAX, rageRatio);
+    const pushDistance = Phaser.Math.Linear(RAGE_PUSH_DISTANCE_MIN, RAGE_PUSH_DISTANCE_MAX, rageRatio);
     let pushed = 0;
     
     const allCrowd = [...this.crowdGroup.getChildren(), ...this.lineCrowdGroup.getChildren()];
@@ -2026,7 +2065,7 @@ export default class GameScene extends Phaser.Scene {
       this.updateHype(this.hype + pushed * 2);
       
       // Visual flash
-      const ring = this.add.circle(this.player.x, this.player.y, 10, 0x00ffff, 0.5).setDepth(150);
+      const ring = this.add.circle(this.player.x, this.player.y, 10, 0xffcc33, 0.55).setDepth(150);
       this.tweens.add({
         targets: ring,
         radius: pushRadius,
@@ -2749,10 +2788,20 @@ export default class GameScene extends Phaser.Scene {
     this.playerAggroInvulnerableUntil = now + AGGRO_CROWD_ATTACK_COOLDOWN_MS;
     this.playAggroCrowdAnimation(crowdEntity, 'attack');
 
+    if (this.absorbRageHit(RAGE_SUSTAIN_GAIN_AGGRO, 90, 0.004)) {
+      this.time.delayedCall(AGGRO_CROWD_ATTACK_RECOVERY_MS, () => {
+        if (crowdEntity.active) {
+          this.updateAggroCrowdAnimation(crowdEntity);
+        }
+      });
+      return;
+    }
+
     const angle = Phaser.Math.Angle.Between(crowdEntity.x, crowdEntity.y, player.x, player.y);
     player.setVelocityX((player.body?.velocity.x || 0) + Math.cos(angle) * shoveForce);
     player.setVelocityY((player.body?.velocity.y || 0) + Math.sin(angle) * shoveForce);
 
+    this.gainRage(RAGE_GAIN_PER_AGGRO_HIT);
     this.aggroHitCount += 1;
     const shouldLoseHalfLife = this.aggroHitCount % AGGRO_HITS_PER_HALF_LIFE === 0;
     if (shouldLoseHalfLife) {
@@ -2804,6 +2853,7 @@ export default class GameScene extends Phaser.Scene {
 
   private handleSecurityCatch(_player: any, _security: any) {
     if (this.isDiving || this.isPerforming) return;
+    if (this.absorbRageHit(RAGE_SUSTAIN_GAIN_SECURITY, 120, 0.006)) return;
     
     this.isDiving = true;
     this.player.setVelocity(0, 0);
@@ -2857,6 +2907,7 @@ export default class GameScene extends Phaser.Scene {
   private handleRoadieCatch(_player: any, roadieSprite: any) {
     if (this.isDiving || this.isPerforming) return;
     this.triggerRoadiePush(roadieSprite as Phaser.Physics.Arcade.Sprite);
+    if (this.absorbRageHit(RAGE_SUSTAIN_GAIN_ROADIE, 130, 0.007)) return;
     // Caught by stage crew!
     this.executeStageDive(true);
   }
@@ -2868,6 +2919,82 @@ export default class GameScene extends Phaser.Scene {
     if (this.hype < 300) this.hypeText.setColor('#ffffff');
     else if (this.hype < 800) this.hypeText.setColor('#ffff00');
     else this.hypeText.setColor('#ff00ff');
+  }
+
+  private updateRageUI() {
+    if (!this.rageBar || !this.rageText) return;
+
+    const ratio = Phaser.Math.Clamp(this.rage / RAGE_MAX, 0, 1);
+    const width = 138;
+    const height = 12;
+    const x = 10;
+    const y = GAME_HEIGHT - 14;
+
+    this.rageBar.clear();
+    this.rageBar.fillStyle(0x101010, 0.85);
+    this.rageBar.fillRoundedRect(x, y, width, height, 4);
+    this.rageBar.lineStyle(2, this.rageActive ? 0xffdd55 : 0xff7744, 0.95);
+    this.rageBar.strokeRoundedRect(x, y, width, height, 4);
+
+    if (ratio > 0) {
+      const fillColor = this.rageActive ? 0xffdd33 : 0xff6633;
+      this.rageBar.fillStyle(fillColor, 0.95);
+      this.rageBar.fillRoundedRect(x + 2, y + 2, (width - 4) * ratio, height - 4, 3);
+    }
+
+    this.rageText.setText(this.rageActive ? `RAGE ${Math.ceil(ratio * 100)}%` : `RAGE ${Math.floor(ratio * 100)}%`);
+    this.rageText.setColor(this.rageActive ? '#ffee66' : ratio >= 1 ? '#ffdd55' : '#ff9966');
+  }
+
+  private setRage(value: number) {
+    const previous = this.rage;
+    this.rage = Phaser.Math.Clamp(value, 0, RAGE_MAX);
+
+    if (!this.rageActive && previous < RAGE_MAX && this.rage >= RAGE_MAX) {
+      this.rageActive = true;
+      this.showFeedbackText('RAGE FULL!', '#ffcc33');
+      this.cameras.main.flash(120, 255, 180, 0);
+    }
+
+    if (this.rageActive && this.rage <= 0) {
+      this.rage = 0;
+      this.rageActive = false;
+    }
+
+    this.updateRageUI();
+  }
+
+  private gainRage(amount: number) {
+    this.setRage(this.rage + amount);
+  }
+
+  private updateRage(delta: number) {
+    if (!this.rageActive) {
+      return;
+    }
+
+    this.setRage(this.rage - (RAGE_DRAIN_PER_SECOND * delta) / 1000);
+  }
+
+  private isRageInvulnerable() {
+    return this.rageActive && this.rage > 0;
+  }
+
+  private absorbRageHit(sustainGain: number, shakeDuration: number, shakeIntensity: number) {
+    if (!this.isRageInvulnerable()) {
+      return false;
+    }
+
+    if (this.time.now < this.playerRageAbsorbUntil) {
+      return true;
+    }
+
+    this.playerRageAbsorbUntil = this.time.now + RAGE_ABSORB_COOLDOWN_MS;
+
+    this.gainRage(sustainGain);
+    this.cameras.main.shake(shakeDuration, shakeIntensity);
+    this.cameras.main.flash(70, 255, 220, 80);
+    return true;
   }
 
   private updateLivesDisplay() {
@@ -2882,6 +3009,10 @@ export default class GameScene extends Phaser.Scene {
   private respawnPlayer() {
     this.isDiving = false;
     this.playerAggroInvulnerableUntil = 0;
+    this.playerRageAbsorbUntil = 0;
+    this.rage = 0;
+    this.rageActive = false;
+    this.updateRageUI();
     this.player.setPosition(GAME_WIDTH / 2, SPAWN_Y);
     this.player.setVelocity(0, 0);
     this.player.setAlpha(1);
