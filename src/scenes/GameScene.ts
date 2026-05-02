@@ -7,8 +7,13 @@ const SPAWN_Y = GAME_HEIGHT - LANE_HEIGHT / 2;
 const PLAYER_FRAME_WIDTH = 144;
 const PLAYER_FRAME_HEIGHT = 128;
 const PLAYER_DISPLAY_SCALE = 0.46;
+const PLAYER_STAGE_SCALE = 0.43;
+const PLAYER_CASE_SCALE = 0.4;
 const PLAYER_BASE_DEPTH = 10;
 const PLAYER_CROWD_SURF_DEPTH = 90;
+const STAGE_STEP_TRANSITION_MS = 170;
+const STAGE_STEP_VISUAL_LIFT = 14;
+const STAGE_STEP_COOLDOWN_MS = 220;
 const DRUMMER_DEPTH = 5;
 const GUITARIST_DEPTH = 6;
 const BASSIST_DEPTH = 6;
@@ -103,6 +108,12 @@ const SECURITY_BOTTOM_Y = 250;
 
 const BONUS_ACTION_DURATION = 3000;
 const MUSICIAN_SPECIAL_COOLDOWN = 12000;
+const STAGE_CASE_PLATFORMS = [
+  { x: 54, y: 54, width: 72, height: 62 },
+  { x: 122, y: 96, width: 70, height: 58 },
+  { x: GAME_WIDTH - 122, y: 96, width: 70, height: 58 },
+  { x: GAME_WIDTH - 54, y: 54, width: 72, height: 62 }
+] as const;
 
 interface BeatEvent {
   time: number;
@@ -138,6 +149,7 @@ export default class GameScene extends Phaser.Scene {
   private spaceKey!: Phaser.Input.Keyboard.Key;
   
   private crowdGroup!: Phaser.Physics.Arcade.Group;
+  private stageCasePlatformGroup!: Phaser.Physics.Arcade.StaticGroup;
   private securityBarrierGroup!: Phaser.Physics.Arcade.Group; // The static gaps
   private securityChaseGroup!: Phaser.Physics.Arcade.Group; // The chasers in the gray area
   private roadiesGroup!: Phaser.Physics.Arcade.Group; // The chasers on the stage
@@ -156,6 +168,8 @@ export default class GameScene extends Phaser.Scene {
   private playerSpecialAnimation: PlayerSpecialAnimation | null = null;
   private playerAggroInvulnerableUntil: number = 0;
   private aggroHitCount: number = 0;
+  private playerStageLevel: 'crowd' | 'stage' | 'case' = 'crowd';
+  private playerStageTransitionUntil: number = 0;
   
   // Music logic
   private musicTime: number = 0;
@@ -272,6 +286,7 @@ export default class GameScene extends Phaser.Scene {
     this.createAggroCrowdAnimations();
 
     this.crowdGroup = this.physics.add.group();
+    this.stageCasePlatformGroup = this.physics.add.staticGroup();
     this.securityBarrierGroup = this.physics.add.group({ immovable: true });
     this.lineCrowdGroup = this.physics.add.group({ immovable: true });
     this.securityChaseGroup = this.physics.add.group();
@@ -289,6 +304,7 @@ export default class GameScene extends Phaser.Scene {
     this.player.setDrag(1000);
     this.player.setMass(2);
     this.player.setScale(PLAYER_DISPLAY_SCALE);
+    this.playerStageLevel = this.getPlayerStageLevel();
     this.player.setDepth(PLAYER_BASE_DEPTH);
     this.configurePlayerBody();
     this.player.play('player-idle-front');
@@ -305,6 +321,7 @@ export default class GameScene extends Phaser.Scene {
     }
 
     this.setupSecurityLane();
+    this.setupStageCasePlatforms();
     this.spawnPersistentCrowd();
     this.spawnSecurityChasers();
     this.spawnRoadies();
@@ -387,6 +404,17 @@ export default class GameScene extends Phaser.Scene {
           }
         }
       }
+    });
+  }
+
+  private setupStageCasePlatforms() {
+    STAGE_CASE_PLATFORMS.forEach(({ x, y, width, height }) => {
+      const platform = this.add.rectangle(x, y, width, height, 0xffffff, 0);
+      this.physics.add.existing(platform, true);
+      platform.setData('stagePlatform', true);
+      const body = platform.body as Phaser.Physics.Arcade.StaticBody | null;
+      body?.setSize(width, height);
+      this.stageCasePlatformGroup.add(platform);
     });
   }
 
@@ -831,6 +859,104 @@ export default class GameScene extends Phaser.Scene {
     }
 
     this.player.setDepth(PLAYER_BASE_DEPTH);
+  }
+
+  private isPlayerOnStageCase() {
+    const body = this.player.body as Phaser.Physics.Arcade.Body | null;
+    if (!body) return false;
+
+    return this.stageCasePlatformGroup.getChildren().some((child: any) => {
+      const gameObject = child as Phaser.GameObjects.Rectangle;
+      const bounds = gameObject.getBounds();
+      const footX = body.center.x;
+      const footY = body.bottom;
+
+      return (
+        footX >= bounds.left &&
+        footX <= bounds.right &&
+        footY >= bounds.top &&
+        footY <= bounds.bottom + 8
+      );
+    });
+  }
+
+  private getPlayerStageLevel(): 'crowd' | 'stage' | 'case' {
+    if (this.player.y >= STAGE_BOTTOM_Y) {
+      return 'crowd';
+    }
+
+    if (this.isPlayerOnStageCase()) {
+      return 'case';
+    }
+
+    return 'stage';
+  }
+
+  private syncPlayerStageScale() {
+    const targetScale =
+      this.playerStageLevel === 'case'
+        ? PLAYER_CASE_SCALE
+        : this.playerStageLevel === 'stage'
+          ? PLAYER_STAGE_SCALE
+          : PLAYER_DISPLAY_SCALE;
+    this.player.setScale(targetScale);
+  }
+
+  private triggerStageHeightTransition(nextLevel: 'crowd' | 'stage' | 'case') {
+    if (this.player.depth === PLAYER_CROWD_SURF_DEPTH || this.isDiving) {
+      this.playerStageLevel = nextLevel;
+      this.syncPlayerStageScale();
+      return;
+    }
+
+    this.playerStageLevel = nextLevel;
+    this.playerStageTransitionUntil = this.time.now + STAGE_STEP_COOLDOWN_MS;
+
+    const goingUp = nextLevel === 'stage' || nextLevel === 'case';
+    const targetScale =
+      nextLevel === 'case'
+        ? PLAYER_CASE_SCALE
+        : nextLevel === 'stage'
+          ? PLAYER_STAGE_SCALE
+          : PLAYER_DISPLAY_SCALE;
+    const liftAmount =
+      nextLevel === 'case'
+        ? STAGE_STEP_VISUAL_LIFT + 6
+        : STAGE_STEP_VISUAL_LIFT;
+    const jumpY = this.player.y + (goingUp ? -liftAmount : liftAmount * 0.55);
+
+    this.tweens.killTweensOf(this.player);
+    this.tweens.add({
+      targets: this.player,
+      scaleX: targetScale,
+      scaleY: targetScale,
+      y: jumpY,
+      duration: STAGE_STEP_TRANSITION_MS,
+      ease: goingUp ? 'Quad.easeOut' : 'Quad.easeInOut',
+      yoyo: true
+    });
+
+    this.cameras.main.shake(60, 0.002);
+  }
+
+  private updatePlayerStageTransition() {
+    if (this.player.depth === PLAYER_CROWD_SURF_DEPTH || this.isDiving) {
+      return;
+    }
+
+    const nextLevel = this.getPlayerStageLevel();
+    if (nextLevel === this.playerStageLevel) {
+      if (this.time.now >= this.playerStageTransitionUntil && !this.tweens.isTweening(this.player)) {
+        this.syncPlayerStageScale();
+      }
+      return;
+    }
+
+    if (this.time.now < this.playerStageTransitionUntil) {
+      return;
+    }
+
+    this.triggerStageHeightTransition(nextLevel);
   }
 
   private getCrowdFacingFromVelocity(
@@ -1674,6 +1800,8 @@ export default class GameScene extends Phaser.Scene {
     this.playerSpecialAnimation = null;
     this.playerAggroInvulnerableUntil = 0;
     this.aggroHitCount = 0;
+    this.playerStageLevel = 'crowd';
+    this.playerStageTransitionUntil = 0;
     this.extraCrowdPending = 0;
     this.extraCrowdTotal = 0;
     this.extraCrowdTriggered = false;
@@ -1701,6 +1829,9 @@ export default class GameScene extends Phaser.Scene {
     this.player.setAlpha(1);
     this.player.setRotation(0);
     this.setPlayerCrowdSurfMode(false);
+    this.playerStageLevel = 'crowd';
+    this.playerStageTransitionUntil = 0;
+    this.syncPlayerStageScale();
     this.configurePlayerBody();
     this.playPlayerAnimation('player-idle-front');
     
@@ -1771,6 +1902,7 @@ export default class GameScene extends Phaser.Scene {
       this.handlePlayerMovement();
     }
 
+    this.updatePlayerStageTransition();
     this.updatePlayerAnimation();
     this.updateVocalistAI(time);
     this.updateGuitaristAI(time);
@@ -2728,6 +2860,9 @@ export default class GameScene extends Phaser.Scene {
     this.player.setRotation(0);
     this.playerFacing = 'front';
     this.setPlayerCrowdSurfMode(false);
+    this.playerStageLevel = 'crowd';
+    this.playerStageTransitionUntil = 0;
+    this.syncPlayerStageScale();
     this.setPlayerSpecialAnimation(null);
     this.playPlayerAnimation('player-idle-front');
     this.updateHype(0);
@@ -2876,7 +3011,7 @@ export default class GameScene extends Phaser.Scene {
               this.crowdGroup.getChildren().forEach((child: any) => {
                 if (Math.abs(child.y - this.player.y) < 60 && Math.abs(child.x - this.player.x) < 80) {
                   if (!this.tweens.isTweening(child)) {
-                    this.tweens.add({ targets: child, scaleY: 0.8, scaleX: 0.8, yoyo: true, duration: 200 });
+                    this.tweens.add({ targets: child, scaleY: 0.7, scaleX: 0.7, yoyo: true, duration: 200 });
                   }
                 }
               });
