@@ -2159,7 +2159,7 @@ export default class GameScene extends Phaser.Scene {
     
     this.cameras.main.flash(200, 0, 255, 255);
     
-    const text = this.add.text(GAME_WIDTH/2, 100, textStr, {
+    const text = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, textStr, {
       fontFamily: 'Outfit', fontSize: '32px', color: '#00ffff', fontStyle: '900', stroke: '#000', strokeThickness: 4
     }).setOrigin(0.5).setDepth(200);
     
@@ -3254,7 +3254,7 @@ export default class GameScene extends Phaser.Scene {
     
     if (forcedByRoadie) {
       endY = STAGE_BOTTOM_Y + 100;
-      resultText = "   BUSTED\nBY ROADIES!";
+      resultText = "      BUSTED\nBY ROADIES!";
       color = "#ff0000";
       isFail = true;
     } else if (this.hype < 300) {
